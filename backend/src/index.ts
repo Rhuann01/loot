@@ -1,1 +1,2 @@
-console.log("Em criamento")
+import "dotenv/config";
+console.log("Em criamento");
