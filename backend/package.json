@@ -17,6 +17,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "apify-client": "^2.25.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2"
   }
