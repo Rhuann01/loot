@@ -1,3 +1,4 @@
+import "dotenv/config";
 import Database from "better-sqlite3";
 
 const db: Database.Database = new Database("loot.db");
