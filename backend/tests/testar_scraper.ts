@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { BuscarOfertas } from "./scraper/apify.js";
+import { BuscarOfertas } from "../src/scraper/apify.js";
 
 const ofertas = await BuscarOfertas();
 console.log(
