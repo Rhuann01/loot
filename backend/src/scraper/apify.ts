@@ -29,11 +29,11 @@ function extrairIdProduto(link: string): string {
   const math = link.match(/MLB\d+/);
   return math ? math[0] : "";
 }
-
-function montarLinkAfiliado(idProduto: string): string {
+// Não é viavel - Necessita de OAuth
+/* function montarLinkAfiliado(idProduto: string): string {
   const affiliateId = process.env.ML_AFFILIATE_ID;
   return `https://www.mercadolivre.com.br/produto/${idProduto}?picker=&affiliate=${affiliateId}`;
-}
+} */
 
 function precoParaNumero(num: string): number {
   return Number(num.replace(".", "").replace(",", "."));
