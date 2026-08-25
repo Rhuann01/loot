@@ -1,4 +1,4 @@
-import { conectarWhatsApp, getSock } from "../src/whatsapp/connection.js";
+/* import { conectarWhatsApp, getSock } from "../src/whatsapp/connection.js";
 import { enviarProduto } from "../src/whatsapp/sender.js";
 
 await conectarWhatsApp();
@@ -15,9 +15,9 @@ setTimeout(async () => {
     frete_gratis: true,
   });
   console.log("mensagem enviada!");
-}, 3000);
+}, 3000); 
 
-/* setTimeout(async () => {
+setTimeout(async () => {
   const sock = getSock()
   if (!sock) return
 
@@ -26,4 +26,5 @@ setTimeout(async () => {
   Object.values(grupos).forEach((grupo) => {
     console.log(`Nome: ${grupo.subject} | ID: ${grupo.id}`)
   })
-}, 3000) */
+}, 3000)
+ */

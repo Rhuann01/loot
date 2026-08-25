@@ -1,2 +1,18 @@
 import "dotenv/config";
-console.log("Tá fucionando, Token:", process.env.APIFY_API_TOKEN);
+import { conectarWhatsApp } from "./whatsapp/connection.js";
+import { iniciarScheduler } from "./auto/scheduler.js";
+import { iniciarServidor } from "./api/server.js";
+
+async function iniciar() {
+  console.log("iniciando Loot...");
+
+  await conectarWhatsApp();
+  console.log("WhatsApp conectando...");
+
+  iniciarScheduler();
+  console.log("scheduler ativo, aguardando horários programados");
+
+  iniciarServidor();
+}
+
+iniciar();

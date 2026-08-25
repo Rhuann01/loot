@@ -4,9 +4,9 @@ import { getSock } from "./connection.js";
 interface ProdutoParaEnviar {
   nome: string;
   preco_atual: string;
-  preco_original?: string;
+  preco_original?: string | null;
   link_afiliado: string;
-  imagem_url?: string;
+  imagem_url?: string | null;
   parcelas?: string;
   frete_gratis?: boolean;
 }

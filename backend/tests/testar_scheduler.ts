@@ -1,7 +1,8 @@
-import cron from "node-cron";
-import { processarESalvarOfertas } from "../scraper/apify.js";
-import { getMelhoresDescontos, marcarComoEnviado, podeEnviarMais, type Produto } from '../db/queries.js'
-import { enviarProduto } from "../whatsapp/sender.js";
+import "dotenv/config";
+import { conectarWhatsApp } from "../src/whatsapp/connection.js";
+import { processarESalvarOfertas } from "../src/scraper/apify.js";
+import { getMelhoresDescontos, marcarComoEnviado, podeEnviarMais } from "../src/db/queries.js";
+import { enviarProduto } from "../src/whatsapp/sender.js";
 
 async function enviarLote(quantidade: number) {
   for (let i = 0; i < quantidade; i++) {
@@ -30,14 +31,14 @@ async function enviarLote(quantidade: number) {
   }
 }
 
-export function iniciarScheduler() {
-  cron.schedule("0 5 * * *", async () => {
-    console.log("rodando busca de ofertas...");
-    await processarESalvarOfertas();
-    await enviarLote(3);
-  });
+await conectarWhatsApp();
 
-  cron.schedule("0 12 * * *", () => enviarLote(3));
-  cron.schedule("0 15 * * *", () => enviarLote(3));
-  cron.schedule("0 20 * * *", () => enviarLote(3));
-}
+setTimeout(async () => {
+  console.log("buscando ofertas...");
+  await processarESalvarOfertas();
+
+  console.log("enviando lote de teste...");
+  await enviarLote(3);
+
+  console.log("teste feito");
+}, 3000);
