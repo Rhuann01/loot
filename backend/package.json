@@ -12,6 +12,8 @@
   "type": "module",
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
     "@types/qrcode": "^1.5.6",
     "@types/qrcode-terminal": "^0.12.2",
@@ -25,7 +27,9 @@
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "apify-client": "^2.25.0",
     "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4"
   }
