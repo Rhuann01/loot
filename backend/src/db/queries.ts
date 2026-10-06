@@ -161,10 +161,12 @@ export interface CredencialML {
 }
 
 export function salvarCredencialML(email: string, senhaCriptografada: string) {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO credenciais_ml (email, senha_criptografada)
     VALUES (?, ?)
-  `).run(email, senhaCriptografada);
+  `,
+  ).run(email, senhaCriptografada);
 }
 
 export function buscarCredencialML(): CredencialML | undefined {
@@ -174,9 +176,17 @@ export function buscarCredencialML(): CredencialML | undefined {
 }
 
 export function atualizarCookiesML(id: number, csrf: string, d2id: string) {
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE credenciais_ml 
     SET cookie_csrf = ?, cookie_d2id = ?, atualizado_em = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(csrf, d2id, id);
+  `,
+  ).run(csrf, d2id, id);
+}
+
+export function buscarProdutoPorId(id: number): Produto | undefined {
+  return db.prepare(`SELECT * FROM produtos WHERE id = ?`).get(id) as
+    | Produto
+    | undefined;
 }

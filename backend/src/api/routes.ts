@@ -1,7 +1,13 @@
 import { Router } from "express";
-import { alternarSelecao, listarProdutos } from "../db/queries.js";
+import {
+  alternarSelecao,
+  buscarProdutoPorId,
+  listarProdutos,
+  marcarComoEnviado,
+} from "../db/queries.js";
 import { getStatusConexao } from "../whatsapp/connection.js";
 import { getConfig, setConfig } from "../db/queries.js";
+import { enviarProduto } from "../whatsapp/sender.js";
 
 const router = Router();
 
@@ -39,12 +45,32 @@ router.post("/config", (req, res) => {
   res.json({ sucesso: true });
 });
 
-
 router.post("/produtos/:id/selecionar", (req, res) => {
   const id = Number(req.params.id);
   const { selecionado } = req.body;
 
   alternarSelecao(id, selecionado);
+  res.json({ sucesso: true });
+});
+
+router.post("/produtos/:id/reenviar", async (req, res) => {
+  const id = Number(req.params.id);
+  const produto = buscarProdutoPorId(id);
+
+  if (!produto) {
+    return res.status(404).json({ erro: "produto não encontrado" });
+  }
+
+  await enviarProduto({
+    nome: produto.nome,
+    preco_atual: produto.preco_atual,
+    preco_original: produto.preco_original,
+    link_afiliado: produto.link_afiliado,
+    imagem_url: produto.imagem_url,
+  });
+
+  marcarComoEnviado(produto.id);
+
   res.json({ sucesso: true });
 });
 

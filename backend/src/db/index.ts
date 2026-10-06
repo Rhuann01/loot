@@ -6,19 +6,23 @@ db.pragma("foreign_keys = ON");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS produtos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    produto_id_ml TEXT NOT NULL UNIQUE,
-    nome TEXT NOT NULL,
-    preco_atual TEXT NOT NULL,
-    preco_original TEXT,
-    desconto_percentual INTEGER DEFAULT 0,
-    imagem_url TEXT,
-    link_afiliado TEXT NOT NULL,
-    categoria_id TEXT,
-    selecionado INTEGER DEFAULT 0,
-    enviado INTEGER DEFAULT 0,
-    criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  produto_id_ml TEXT NOT NULL UNIQUE,
+  nome TEXT NOT NULL,
+  preco_atual TEXT NOT NULL,
+  preco_original TEXT,
+  desconto_percentual INTEGER DEFAULT 0,
+  comissao_valor REAL DEFAULT 0,
+  comissao_percentual REAL DEFAULT 0,
+  imagem_url TEXT,
+  link_afiliado TEXT NOT NULL,
+  categoria_id TEXT,
+  marketplace_origem TEXT DEFAULT 'mercado_livre',
+  selecionado INTEGER DEFAULT 0,
+  enviado INTEGER DEFAULT 0,
+  criado_em TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
   CREATE TABLE IF NOT EXISTS config (
     chave TEXT PRIMARY KEY,
     valor TEXT NOT NULL
