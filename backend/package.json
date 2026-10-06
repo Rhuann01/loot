@@ -23,6 +23,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@afilimax/mercado-livre-provider": "^0.1.4",
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "apify-client": "^2.25.0",
@@ -31,6 +32,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pino": "^10.3.1",
+    "puppeteer": "^25.12.0",
     "qrcode": "^1.5.4"
   }
 }

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 const db: Database.Database = new Database("loot.db");
 
-db.pragma("foreign_kays=ON");
+db.pragma("foreign_keys = ON");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS produtos (
@@ -37,6 +37,15 @@ db.exec(`
     enviado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (produto_id) REFERENCES produtos(id)
   );
+
+  CREATE TABLE IF NOT EXISTS credenciais_ml (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL,
+  senha_criptografada TEXT NOT NULL,
+  cookie_csrf TEXT,
+  cookie_d2id TEXT,
+  atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 const defaults: Record<string, string> = {
@@ -54,7 +63,7 @@ for (const [chave, valor] of Object.entries(defaults)) {
 }
 
 console.log(
-  "banco de dados pronto: 4 tabelas criadas, configs padrão aplicadas",
+  "banco de dados pronto: 5 tabelas criadas, configs padrão aplicadas",
 );
 
 export default db;

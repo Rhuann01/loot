@@ -148,3 +148,35 @@ export function podeEnviarMais(): boolean {
   const limite = Number(getConfig("limite_diario") ?? 10);
   return autoAtivo && enviosHoje() < limite;
 }
+
+// ---------- CREDENCIAIS MERCADO LIVRE ----------
+
+export interface CredencialML {
+  id: number;
+  email: string;
+  senha_criptografada: string;
+  cookie_csrf: string | null;
+  cookie_d2id: string | null;
+  atualizado_em: string;
+}
+
+export function salvarCredencialML(email: string, senhaCriptografada: string) {
+  db.prepare(`
+    INSERT INTO credenciais_ml (email, senha_criptografada)
+    VALUES (?, ?)
+  `).run(email, senhaCriptografada);
+}
+
+export function buscarCredencialML(): CredencialML | undefined {
+  return db
+    .prepare(`SELECT * FROM credenciais_ml ORDER BY id DESC LIMIT 1`)
+    .get() as CredencialML | undefined;
+}
+
+export function atualizarCookiesML(id: number, csrf: string, d2id: string) {
+  db.prepare(`
+    UPDATE credenciais_ml 
+    SET cookie_csrf = ?, cookie_d2id = ?, atualizado_em = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(csrf, d2id, id);
+}
