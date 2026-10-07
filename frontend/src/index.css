@@ -128,3 +128,44 @@
     @apply font-sans;
     }
 }
+
+.pagina {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: #f7f7fb;
+}
+
+.card {
+  width: min(100%, 30rem);
+  max-width: 30rem;
+  padding: 2rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 1.25rem;
+  background: white;
+  box-shadow: 0 20px 50px rgb(30 41 59 / 0.08);
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: #6366f1;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+h1 { margin: 0; font-size: 1.8rem; }
+.descricao { color: #64748b; line-height: 1.5; }
+.switch-row, .campo { display: grid; gap: 0.5rem; margin-top: 1.25rem; }
+.switch-row { display: flex; align-items: center; gap: 0.6rem; font-weight: 600; }
+.campo label { font-weight: 600; }
+input { box-sizing: border-box; padding: 0.7rem; border: 1px solid #cbd5e1; border-radius: 0.6rem; font: inherit; }
+.horario-form { display: flex; gap: 0.6rem; }
+button { cursor: pointer; border: 0; border-radius: 0.6rem; padding: 0.7rem 1rem; font: inherit; font-weight: 700; }
+.horario-form button, .salvar { color: white; background: #4f46e5; }
+.horarios { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1rem; }
+.horario { display: flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.55rem 0.45rem 0.75rem; border-radius: 999px; color: #3730a3; background: #eef2ff; font-weight: 700; }
+.horario button { padding: 0 0.35rem; color: #3730a3; background: transparent; font-size: 1.2rem; }
+.salvar { width: 100%; margin-top: 1.5rem; }
+.mensagem { margin-bottom: 0; color: #475569; }

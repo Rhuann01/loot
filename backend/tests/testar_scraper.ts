@@ -1,9 +1,10 @@
-/* import "dotenv/config";
+import "dotenv/config";
 
-import { BuscarOfertas } from "../src/scraper/apify.js";
+import { buscarOfertas } from "../src/scraper/apify.js";
 
-const ofertas = await BuscarOfertas();
+const ofertas = await buscarOfertas();
+
 console.log(
-  `Ofertas encontradas: ${ofertas.length}\n=============== Ofertas ===============\n`,
+  `Ofertas encontradas: ${ofertas.length}\n=============== Primeiras ofertas ===============\n`,
 );
-console.log(ofertas[0]); */
+console.dir(ofertas.slice(0, 3), { depth: null });
