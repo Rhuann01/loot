@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { ApifyClient } from "apify-client";
-import { salvarProduto, setConfig } from "../db/queries.js";
+import { limparProdutosAntigos, salvarProduto, setConfig } from "../db/queries.js";
 
 const client = new ApifyClient({
   token: process.env.APIFY_API_TOKEN as string,
@@ -143,10 +143,13 @@ export async function processarESalvarOfertas() {
       salvas++;
     }
 
+    const produtosRemovidos = limparProdutosAntigos();
     setConfig("scraper_ultima_sucesso", new Date().toISOString());
     setConfig("scraper_ultimo_resultado", String(salvas));
     setConfig("scraper_ultimo_erro", "");
-    console.log(`${salvas} ofertas válidas processadas e salvas`);
+    console.log(
+      `${salvas} ofertas válidas processadas e salvas; ${produtosRemovidos} produtos antigos removidos`,
+    );
     return salvas;
   } catch (erro) {
     const mensagem = erro instanceof Error ? erro.message : String(erro);

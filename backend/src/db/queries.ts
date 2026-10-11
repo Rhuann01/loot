@@ -85,6 +85,30 @@ export function salvarProduto(produto: NovoProduto) {
   inserir.run(dados);
 }
 
+export function limparProdutosAntigos(): number {
+  const resultado = db
+    .prepare(
+      `
+      DELETE FROM produtos
+      WHERE status_fila IN ('sent', 'failed')
+        AND datetime(criado_em) < datetime('now', '-30 days')
+        AND NOT EXISTS (
+          SELECT 1 FROM envios WHERE envios.produto_id = produtos.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM tentativas_de_envio
+          WHERE tentativas_de_envio.produto_id = produtos.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM idempotencias_reenvio_manual
+          WHERE idempotencias_reenvio_manual.produto_id = produtos.id
+        )
+    `,
+    )
+    .run();
+  return resultado.changes;
+}
+
 export function buscarProdutoPorCodigoML(
   produtoIdMl: string,
 ): Produto | undefined {

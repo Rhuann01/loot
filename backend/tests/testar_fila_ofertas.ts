@@ -9,11 +9,18 @@ const diretorioTeste = mkdtempSync(join(tmpdir(), "loot-fila-"));
 process.chdir(diretorioTeste);
 
 const { default: db } = await import("../src/db/index.js");
+const queries = await import("../src/db/queries.js");
 const {
   salvarProduto,
   reservarProdutoParaEnvio,
   setConfig,
-} = await import("../src/db/queries.js");
+} = queries;
+
+const limparProdutosAntigos = (
+  queries as {
+    limparProdutosAntigos?: () => number;
+  }
+).limparProdutosAntigos;
 
 function limparBanco() {
   db.exec("DELETE FROM tentativas_de_envio; DELETE FROM envios; DELETE FROM produtos;");
@@ -151,6 +158,59 @@ try {
     reservas.filter((reserva) => reserva.produto !== null).length,
     1,
     "duas execuções concorrentes não devem ultrapassar o limite diário",
+  );
+
+  limparBanco();
+  const sentAntigoId = criarProduto("MLB-SENT-ANTIGO", 50);
+  const failedAntigoId = criarProduto("MLB-FAILED-ANTIGO", 50);
+  const sentRecenteId = criarProduto("MLB-SENT-RECENTE", 50);
+  const pendingAntigoId = criarProduto("MLB-PENDING-ANTIGO", 50);
+  const sendingAntigoId = criarProduto("MLB-SENDING-ANTIGO", 50);
+  const ambiguoAntigoId = criarProduto("MLB-AMBIGUO-ANTIGO", 50);
+  const sentComHistoricoId = criarProduto("MLB-SENT-COM-HISTORICO", 50);
+  db.prepare(
+    "UPDATE produtos SET status_fila = 'sent', enviado = 1, criado_em = datetime('now', '-31 days') WHERE id = ?",
+  ).run(sentAntigoId);
+  db.prepare(
+    "UPDATE produtos SET status_fila = 'failed', criado_em = datetime('now', '-31 days') WHERE id = ?",
+  ).run(failedAntigoId);
+  db.prepare(
+    "UPDATE produtos SET status_fila = 'sent', enviado = 1, criado_em = datetime('now', '-29 days') WHERE id = ?",
+  ).run(sentRecenteId);
+  db.prepare(
+    "UPDATE produtos SET criado_em = datetime('now', '-31 days') WHERE id IN (?, ?, ?)",
+  ).run(pendingAntigoId, sendingAntigoId, ambiguoAntigoId);
+  db.prepare("UPDATE produtos SET status_fila = 'sending' WHERE id = ?").run(sendingAntigoId);
+  db.prepare("UPDATE produtos SET status_fila = 'ambiguous' WHERE id = ?").run(ambiguoAntigoId);
+  db.prepare(
+    "UPDATE produtos SET status_fila = 'sent', enviado = 1, criado_em = datetime('now', '-31 days') WHERE id = ?",
+  ).run(sentComHistoricoId);
+  db.prepare(
+    "INSERT INTO tentativas_de_envio (produto_id, origem, status, finalizado_em) VALUES (?, 'automatico', 'sent', CURRENT_TIMESTAMP)",
+  ).run(sentComHistoricoId);
+
+  assert.equal(
+    typeof limparProdutosAntigos,
+    "function",
+    "a limpeza de produtos antigos deve estar disponível",
+  );
+  if (typeof limparProdutosAntigos !== "function") {
+    throw new Error("a limpeza de produtos antigos não foi implementada");
+  }
+  assert.equal(limparProdutosAntigos(), 2);
+  const produtosRestantes = db
+    .prepare("SELECT external_product_id FROM produtos ORDER BY external_product_id")
+    .all() as Array<{ external_product_id: string }>;
+  assert.deepEqual(
+    produtosRestantes.map((produto) => produto.external_product_id),
+    [
+      "MLB-AMBIGUO-ANTIGO",
+      "MLB-PENDING-ANTIGO",
+      "MLB-SENDING-ANTIGO",
+      "MLB-SENT-COM-HISTORICO",
+      "MLB-SENT-RECENTE",
+    ],
+    "a limpeza deve preservar produtos recentes, ativos, ambíguos e com histórico",
   );
 
   console.log("Resultado: fila de ofertas passou");
