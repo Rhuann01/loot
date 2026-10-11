@@ -1,9 +1,7 @@
 import { Router, type RequestHandler } from "express";
 import {
   alternarSelecao,
-  buscarProdutoPorId,
   listarProdutos,
-  marcarComoEnviado,
   listarIntegracoes,
   atualizarAtivacaoIntegracao,
   obterResumoFila,
@@ -16,7 +14,10 @@ import {
   solicitarReconexao,
 } from "../whatsapp/connection.js";
 import { getConfig, setConfig } from "../db/queries.js";
-import { enviarProduto } from "../whatsapp/sender.js";
+import {
+  reenviarManualIdempotente,
+  statusHttpReenvioManual,
+} from "../whatsapp/manual.js";
 import {
   obterConfigScheduler,
   obterEstadoScheduler,
@@ -37,7 +38,9 @@ const exigirAutenticacao: RequestHandler = (req, res, next) => {
   const senha = process.env.PAINEL_SENHA;
 
   if (!usuario || !senha) {
-    res.status(503).json({ erro: "autenticação administrativa não configurada" });
+    res
+      .status(503)
+      .json({ erro: "autenticação administrativa não configurada" });
     return;
   }
 
@@ -52,6 +55,8 @@ const exigirAutenticacao: RequestHandler = (req, res, next) => {
   next();
 };
 
+router.use(exigirAutenticacao);
+
 router.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
@@ -65,9 +70,6 @@ router.get("/whatsapp/status", (req, res) => {
   const status = getStatusConexao();
   res.json(status);
 });
-
-// A partir daqui começam as rotas administrativas.
-router.use(exigirAutenticacao);
 
 router.get("/whatsapp/qr", (_req, res) => {
   res.json(getQrCode());
@@ -202,7 +204,9 @@ router.put("/integrations/:key/active", (req, res) => {
     atualizarAtivacaoIntegracao(req.params.key, active);
     res.json({ integrations: listarIntegracoes() });
   } catch (erro) {
-    res.status(404).json({ erro: erro instanceof Error ? erro.message : String(erro) });
+    res
+      .status(404)
+      .json({ erro: erro instanceof Error ? erro.message : String(erro) });
   }
 });
 
@@ -216,11 +220,17 @@ router.put("/scheduler", (req, res) => {
     horarios,
     limite_diario,
     quantidade_por_execucao,
-  } = req.body as Partial<ConfigScheduler>;
+    intervalo_entre_mensagens_ms,
+  } =
+    req.body as Partial<ConfigScheduler>;
 
-  const horariosValidos = Array.isArray(horarios) && horarios.every(
-    (horario) => typeof horario === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(horario),
-  );
+  const horariosValidos =
+    Array.isArray(horarios) &&
+    horarios.every(
+      (horario) =>
+        typeof horario === "string" &&
+        /^([01]\d|2[0-3]):[0-5]\d$/.test(horario),
+    );
 
   if (
     typeof ativo !== "boolean" ||
@@ -233,26 +243,40 @@ router.put("/scheduler", (req, res) => {
   }
 
   const configAtual = obterConfigScheduler();
-  const limite = limite_diario === undefined
-    ? configAtual.limite_diario
-    : Number(limite_diario);
+  const limite =
+    limite_diario === undefined
+      ? configAtual.limite_diario
+      : Number(limite_diario);
   if (!Number.isInteger(limite) || limite < 1 || limite > 100) {
     return res.status(400).json({
       erro: "limite_diario deve ser um número inteiro entre 1 e 100",
     });
   }
 
-  const quantidadeLegada = quantidade_por_execucao === undefined
-    ? configAtual.quantidade_por_execucao
-    : Number(quantidade_por_execucao);
+  const quantidadeLegada =
+    quantidade_por_execucao === undefined
+      ? configAtual.quantidade_por_execucao
+      : Number(quantidade_por_execucao);
+
+  const intervalo =
+    intervalo_entre_mensagens_ms === undefined
+      ? configAtual.intervalo_entre_mensagens_ms
+      : Number(intervalo_entre_mensagens_ms);
+  if (!Number.isInteger(intervalo) || intervalo < 0 || intervalo > 600_000) {
+    return res.status(400).json({
+      erro: "intervalo_entre_mensagens_ms deve ser um número inteiro entre 0 e 600000",
+    });
+  }
 
   const config: ConfigScheduler = {
     ativo,
     horarios: [...new Set(horarios)].sort(),
     limite_diario: limite,
-    quantidade_por_execucao: Number.isInteger(quantidadeLegada) && quantidadeLegada > 0
-      ? quantidadeLegada
-      : configAtual.quantidade_por_execucao,
+    quantidade_por_execucao:
+      Number.isInteger(quantidadeLegada) && quantidadeLegada > 0
+        ? quantidadeLegada
+        : configAtual.quantidade_por_execucao,
+    intervalo_entre_mensagens_ms: intervalo,
   };
 
   salvarConfigScheduler(config);
@@ -269,23 +293,29 @@ router.post("/produtos/:id/selecionar", (req, res) => {
 
 router.post("/produtos/:id/reenviar", async (req, res) => {
   const id = Number(req.params.id);
-  const produto = buscarProdutoPorId(id);
-
-  if (!produto) {
-    return res.status(404).json({ erro: "produto não encontrado" });
+  const chave = req.header("Idempotency-Key")?.trim();
+  if (!chave || chave.length > 200) {
+    return res.status(400).json({
+      erro: "header Idempotency-Key é obrigatório e deve ter no máximo 200 caracteres",
+    });
   }
 
-  await enviarProduto({
-    nome: produto.nome,
-    preco_atual: produto.preco_atual,
-    preco_original: produto.preco_original,
-    link_afiliado: produto.link_afiliado,
-    imagem_url: produto.imagem_url,
-  });
-
-  marcarComoEnviado(produto.id);
-
-  res.json({ sucesso: true });
+  try {
+    const resultado = await reenviarManualIdempotente(id, chave);
+    const status = statusHttpReenvioManual(resultado);
+    if (resultado === "sent") return res.status(status).json({ sucesso: true });
+    if (resultado === "sending") return res.status(status).json({ status: resultado });
+    if (resultado === "conflito") {
+      return res.status(status).json({ erro: "Idempotency-Key já foi usada para outro produto" });
+    }
+    if (resultado === "ausente") return res.status(status).json({ erro: "produto não encontrado" });
+    return res.status(status).json({
+      erro: "não foi possível confirmar o envio manual",
+      status: resultado,
+    });
+  } catch {
+    res.status(502).json({ erro: "não foi possível confirmar o envio manual" });
+  }
 });
 
 // ---------- Afiliado Mercado Livre ----------

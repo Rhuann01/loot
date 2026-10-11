@@ -4,87 +4,84 @@ import { processarESalvarOfertas } from "../scraper/mercadolivre.js";
 import { getAffiliateProvider } from "../integrations/registry.js";
 import {
   getConfig,
-  liberarReservaEnvio,
   marcarComoEnviado,
   marcarEnvioAmbiguo,
   marcarFalhaEnvio,
-  podeEnviarMais,
-  reservarProdutoParaEnvio,
+  recuperarEnviosAbandonados,
+  reservarProdutoParaEnvioComTentativa,
   setConfig,
   integracaoEstaAtiva,
   atualizarLinkAfiliado,
 } from "../db/queries.js";
 import { enviarProduto } from "../whatsapp/sender.js";
+import {
+  executarEnvioProtegido,
+  tentarExecutarLoteAutomatico,
+} from "../whatsapp/dispatch.js";
 
-async function enviarLote(quantidade: number) {
+export async function enviarLote(
+  quantidade: number,
+  enviar: typeof enviarProduto = enviarProduto,
+) {
   for (let i = 0; i < quantidade; i++) {
-    if (getConfig("auto_envio_ativo") !== "true" || !podeEnviarMais()) {
+    if (getConfig("auto_envio_ativo") !== "true") {
       console.log("limite diário atingido ou auto-envio desligado, parando");
       break;
     }
 
-    const produto = reservarProdutoParaEnvio();
+    const enviado = await executarEnvioProtegido(
+      async ({ aguardarIntervaloAntesDaMensagem }) => {
+        if (getConfig("auto_envio_ativo") !== "true") return false;
+        const reserva = reservarProdutoParaEnvioComTentativa();
+        if (!reserva) return false;
+        const { produto, tentativa } = reserva;
 
-    if (!produto) {
-      console.log("nenhum produto novo pra enviar");
-      break;
-    }
-
-    if (getConfig("auto_envio_ativo") !== "true") {
-      console.log("scheduler: envio interrompido porque foi desativado");
-      liberarReservaEnvio(produto.id);
-      break;
-    }
-
-    try {
-      let linkAfiliado = produto.link_afiliado;
-      const precisaGerarLink =
-        produto.source_key === "mercado_livre" &&
-        produto.link_original &&
-        produto.link_afiliado === produto.link_original;
-
-      if (precisaGerarLink) {
         try {
-          const linkOriginal = produto.link_original;
-          if (!linkOriginal) throw new Error("URL original do produto ausente");
+          let linkAfiliado = produto.link_afiliado;
+          const precisaGerarLink =
+            produto.source_key === "mercado_livre" &&
+            produto.link_original &&
+            produto.link_afiliado === produto.link_original;
 
-          console.log(`gerando link afiliado para o produto ${produto.id} no envio`);
-          linkAfiliado = await getAffiliateProvider("mercado_livre").generateLink(
-            linkOriginal,
-          );
-          atualizarLinkAfiliado(produto.external_product_id, linkAfiliado);
+          if (precisaGerarLink) {
+            try {
+              const linkOriginal = produto.link_original;
+              if (!linkOriginal) throw new Error("URL original do produto ausente");
+              linkAfiliado = await getAffiliateProvider("mercado_livre").generateLink(
+                linkOriginal,
+              );
+              atualizarLinkAfiliado(produto.external_product_id, linkAfiliado);
+            } catch {
+              console.warn(
+                `não foi possível gerar link afiliado para ${produto.id}; usando o link original`,
+              );
+            }
+          }
+
+          await aguardarIntervaloAntesDaMensagem();
+          await enviar({
+            nome: produto.nome,
+            preco_atual: produto.preco_atual,
+            preco_original: produto.preco_original,
+            link_afiliado: linkAfiliado,
+            imagem_url: produto.imagem_url,
+          });
         } catch (erro) {
-          console.warn(
-            `não foi possível gerar link afiliado para ${produto.id}; usando o link original`,
-            erro,
-          );
+          const mensagemErro = erro instanceof Error ? erro.message : String(erro);
+          if (mensagemErro === "WhatsApp não está conectado") {
+            marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id);
+          } else {
+            marcarEnvioAmbiguo(produto.id, mensagemErro, tentativa.id);
+          }
+          return false;
         }
-      }
 
-      await enviarProduto({
-        nome: produto.nome,
-        preco_atual: produto.preco_atual,
-        preco_original: produto.preco_original,
-        link_afiliado: linkAfiliado,
-        imagem_url: produto.imagem_url,
-      });
-    } catch (erro) {
-      console.error(
-        `falha ao enviar produto ${produto.id}; ele continuará pendente`,
-        erro,
-      );
-      const mensagemErro = erro instanceof Error ? erro.message : String(erro);
-      if (mensagemErro === "WhatsApp não está conectado") {
-        marcarFalhaEnvio(produto.id, mensagemErro);
-      } else {
-        // Sem confirmação do WhatsApp, repetir pode duplicar uma mensagem aceita.
-        marcarEnvioAmbiguo(produto.id, mensagemErro);
-      }
-      break;
-    }
-
-    marcarComoEnviado(produto.id);
-    console.log(`enviado: ${produto.nome}`);
+        marcarComoEnviado(produto.id, tentativa.id);
+        console.log(`enviado: ${produto.nome}`);
+        return true;
+      },
+    );
+    if (!enviado) break;
   }
 }
 
@@ -94,6 +91,7 @@ export interface ConfigScheduler {
   limite_diario: number;
   /** Mantido para compatibilidade com o frontend atual; não controla mais a distribuição. */
   quantidade_por_execucao: number;
+  intervalo_entre_mensagens_ms: number;
 }
 
 export const MAX_HORARIOS_SCHEDULER = 4;
@@ -119,6 +117,9 @@ export function obterConfigScheduler(): ConfigScheduler {
     horarios: lerHorarios(),
     limite_diario: Number(getConfig("limite_diario") ?? 12),
     quantidade_por_execucao: Number(getConfig("quantidade_por_execucao") ?? 3),
+    intervalo_entre_mensagens_ms: Number(
+      getConfig("intervalo_entre_mensagens_ms") ?? 3000,
+    ),
   };
 }
 
@@ -174,6 +175,8 @@ export function recarregarScheduler() {
       console.log(`scheduler: executando envio das ${horario}`);
 
       try {
+        const executou = await tentarExecutarLoteAutomatico(async () => {
+          recuperarEnviosAbandonados();
         const configAtual = obterConfigScheduler();
 
         // A coleta atualiza o estoque, mas não pode impedir os envios.
@@ -210,6 +213,10 @@ export function recarregarScheduler() {
         } catch (erro) {
           console.error("scheduler: falha no lote de envio", erro);
         }
+        });
+        if (executou === undefined) {
+          console.warn("scheduler: outro processo já está executando o lote");
+        }
       } finally {
         execucaoEmAndamento = false;
       }
@@ -225,9 +232,14 @@ export function salvarConfigScheduler(config: ConfigScheduler) {
   setConfig("horarios_envio", JSON.stringify(config.horarios));
   setConfig("limite_diario", String(config.limite_diario));
   setConfig("quantidade_por_execucao", String(config.quantidade_por_execucao));
+  setConfig(
+    "intervalo_entre_mensagens_ms",
+    String(config.intervalo_entre_mensagens_ms),
+  );
   recarregarScheduler();
 }
 
 export function iniciarScheduler() {
+  recuperarEnviosAbandonados();
   recarregarScheduler();
 }

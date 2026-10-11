@@ -1,4 +1,5 @@
 import db from "./index.js";
+import { randomUUID } from "node:crypto";
 
 export interface Produto {
   id: number;
@@ -15,11 +16,24 @@ export interface Produto {
   categoria_id: string | null;
   selecionado: number;
   enviado: number;
-  status_fila: "pending" | "sending" | "sent" | "failed";
+  status_fila: "pending" | "sending" | "sent" | "failed" | "ambiguous";
   tentativas_envio: number;
   ultimo_erro_envio: string | null;
   envio_iniciado_em: string | null;
+  origem_envio_em_andamento: OrigemEnvio | null;
   criado_em: string;
+}
+
+export type OrigemEnvio = "manual" | "automatico";
+
+export interface TentativaEnvio {
+  id: number;
+  produto_id: number;
+  origem: OrigemEnvio;
+  status: "sending" | "sent" | "failed" | "ambiguous" | "cancelled";
+  motivo: string | null;
+  iniciado_em: string;
+  finalizado_em: string | null;
 }
 interface NovoProduto {
   source_key?: string;
@@ -36,7 +50,10 @@ interface NovoProduto {
 
 export function salvarProduto(produto: NovoProduto) {
   const dados = {
-    produto_id_ml: produto.source_key === "mercado_livre" ? produto.external_product_id : null,
+    produto_id_ml:
+      produto.source_key === "mercado_livre"
+        ? produto.external_product_id
+        : null,
     source_key: produto.source_key ?? "mercado_livre",
     external_product_id: produto.external_product_id,
     marketplace_origem: produto.source_key ?? "mercado_livre",
@@ -68,9 +85,13 @@ export function salvarProduto(produto: NovoProduto) {
   inserir.run(dados);
 }
 
-export function buscarProdutoPorCodigoML(produtoIdMl: string): Produto | undefined {
+export function buscarProdutoPorCodigoML(
+  produtoIdMl: string,
+): Produto | undefined {
   return db
-    .prepare(`SELECT * FROM produtos WHERE source_key = 'mercado_livre' AND external_product_id = ?`)
+    .prepare(
+      `SELECT * FROM produtos WHERE source_key = 'mercado_livre' AND external_product_id = ?`,
+    )
     .get(produtoIdMl) as Produto | undefined;
 }
 
@@ -86,7 +107,10 @@ export function buscarProdutosPorCodigosML(produtoIds: string[]): Produto[] {
     .all(...produtoIds) as Produto[];
 }
 
-export function atualizarLinkAfiliado(produtoIdMl: string, linkAfiliado: string) {
+export function atualizarLinkAfiliado(
+  produtoIdMl: string,
+  linkAfiliado: string,
+) {
   db.prepare(
     `UPDATE produtos
      SET link_afiliado = ?
@@ -101,10 +125,7 @@ export function listarProdutos(): Produto[] {
 }
 
 export function getMelhoresDescontos(limite: number): Produto[] {
-  const janelaDias = Math.max(
-    1,
-    Number(getConfig("janela_fallback_dias") ?? 3) || 3,
-  );
+  const { descontoMinimo, janelaDias } = obterCriteriosDaFila();
 
   return db
     .prepare(
@@ -113,12 +134,26 @@ export function getMelhoresDescontos(limite: number): Produto[] {
     WHERE enviado = 0
       AND status_fila IN ('pending', 'failed')
       AND tentativas_envio < 3
+      AND desconto_percentual >= ?
       AND datetime(criado_em) >= datetime('now', ?)
-    ORDER BY desconto_percentual DESC 
+    ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
     LIMIT ?
   `,
     )
-    .all(`-${janelaDias} days`, limite) as Produto[];
+    .all(descontoMinimo, `-${janelaDias} days`, limite) as Produto[];
+}
+
+function obterCriteriosDaFila() {
+  const descontoMinimo = Math.max(
+    0,
+    Number(getConfig("desconto_minimo_global") ?? 20) || 0,
+  );
+  const janelaDias = Math.max(
+    1,
+    Number(getConfig("janela_fallback_dias") ?? 3) || 3,
+  );
+
+  return { descontoMinimo, janelaDias };
 }
 
 export function getProdutosSelecionadosManualmente(): Produto[] {
@@ -172,76 +207,318 @@ export function adicionarCategoriaMonitorada(
   ).run(categoria_id, categoria_nome);
 }
 
-export function marcarComoEnviado(produtoId: number) {
+export function marcarComoEnviado(produtoId: number, tentativaId?: number) {
   const transacao = db.transaction(() => {
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE produtos
       SET enviado = 1,
           status_fila = 'sent',
           envio_iniciado_em = NULL,
+          origem_envio_em_andamento = NULL,
           ultimo_erro_envio = NULL
       WHERE id = ?
-    `).run(produtoId);
+    `,
+    ).run(produtoId);
+    if (tentativaId !== undefined) {
+      db.prepare(
+        `UPDATE tentativas_de_envio
+         SET status = 'sent', motivo = NULL, finalizado_em = CURRENT_TIMESTAMP
+         WHERE id = ? AND produto_id = ? AND status = 'sending'`,
+      ).run(tentativaId, produtoId);
+    }
     db.prepare(`INSERT INTO envios (produto_id) VALUES (?)`).run(produtoId);
   });
   transacao();
 }
 
-export function reservarProdutoParaEnvio(): Produto | undefined {
+export interface ReservaEnvio {
+  produto: Produto;
+  tentativa: TentativaEnvio;
+}
+
+export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined {
+  const { descontoMinimo, janelaDias } = obterCriteriosDaFila();
+  const limiteDiario = Math.max(
+    0,
+    Number(getConfig("limite_diario") ?? 12) || 0,
+  );
+
   return db.transaction(() => {
     const produto = db
-      .prepare(`
-        SELECT * FROM produtos
-        WHERE enviado = 0
-          AND status_fila IN ('pending', 'failed')
-          AND tentativas_envio < 3
-        ORDER BY desconto_percentual DESC
-        LIMIT 1
-      `)
-      .get() as Produto | undefined;
-
-    if (!produto) return undefined;
-
-    db.prepare(`
+      .prepare(
+      `
       UPDATE produtos
       SET status_fila = 'sending',
           tentativas_envio = tentativas_envio + 1,
           envio_iniciado_em = CURRENT_TIMESTAMP,
           ultimo_erro_envio = NULL
-      WHERE id = ? AND enviado = 0
-    `).run(produto.id);
+      WHERE id = (
+        SELECT id FROM produtos
+        WHERE enviado = 0
+          AND status_fila IN ('pending', 'failed')
+          AND tentativas_envio < 3
+          AND desconto_percentual >= ?
+          AND datetime(criado_em) >= datetime('now', ?)
+        ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
+        LIMIT 1
+      )
+      AND (
+        (SELECT COUNT(*) FROM envios WHERE date(enviado_em) = date('now')) +
+        (SELECT COUNT(*) FROM produtos
+         WHERE enviado = 0
+           AND status_fila = 'sending'
+           AND date(envio_iniciado_em) = date('now'))
+      ) < ?
+      RETURNING *
+    `,
+      )
+      .get(descontoMinimo, `-${janelaDias} days`, limiteDiario) as
+      | Produto
+      | undefined;
+    if (!produto) return undefined;
 
-    return db
-      .prepare(`SELECT * FROM produtos WHERE id = ?`)
-      .get(produto.id) as Produto;
+    db.prepare(
+      `UPDATE produtos SET origem_envio_em_andamento = 'automatico' WHERE id = ?`,
+    ).run(produto.id);
+    const tentativa = db
+      .prepare(
+        `INSERT INTO tentativas_de_envio (produto_id, origem, status)
+         VALUES (?, 'automatico', 'sending') RETURNING *`,
+      )
+      .get(produto.id) as TentativaEnvio;
+    return {
+      produto: buscarProdutoPorId(produto.id) as Produto,
+      tentativa,
+    };
   })();
 }
 
-export function marcarFalhaEnvio(produtoId: number, erro: string) {
-  db.prepare(`
-    UPDATE produtos
-    SET status_fila = 'failed',
-        ultimo_erro_envio = ?,
-        envio_iniciado_em = NULL
-    WHERE id = ? AND enviado = 0
-  `).run(erro.slice(0, 500), produtoId);
+export function reservarProdutoParaEnvio(): Produto | undefined {
+  return reservarProdutoParaEnvioComTentativa()?.produto;
 }
 
-export function marcarEnvioAmbiguo(produtoId: number, erro: string) {
-  db.prepare(`
+export function marcarFalhaEnvio(
+  produtoId: number,
+  erro: string,
+  tentativaId?: number,
+  preservarProdutoEnviado = false,
+) {
+  db.prepare(
+    `
     UPDATE produtos
-    SET status_fila = 'sending',
-        ultimo_erro_envio = ?
-    WHERE id = ? AND enviado = 0
-  `).run(erro.slice(0, 500), produtoId);
+    SET status_fila = CASE
+          WHEN ? = 1 AND enviado = 1 THEN 'sent'
+          ELSE 'failed'
+        END,
+        ultimo_erro_envio = ?,
+        envio_iniciado_em = NULL,
+        origem_envio_em_andamento = NULL
+    WHERE id = ?
+  `,
+  ).run(preservarProdutoEnviado ? 1 : 0, erro.slice(0, 500), produtoId);
+  if (tentativaId !== undefined) {
+    db.prepare(
+      `UPDATE tentativas_de_envio
+       SET status = 'failed', motivo = ?, finalizado_em = CURRENT_TIMESTAMP
+       WHERE id = ? AND produto_id = ? AND status = 'sending'`,
+    ).run(erro.slice(0, 500), tentativaId, produtoId);
+  }
+}
+
+export function marcarEnvioAmbiguo(
+  produtoId: number,
+  erro: string,
+  tentativaId?: number,
+) {
+  db.prepare(
+    `
+    UPDATE produtos
+    SET status_fila = 'ambiguous',
+        ultimo_erro_envio = ?,
+        envio_iniciado_em = NULL,
+        origem_envio_em_andamento = NULL
+    WHERE id = ?
+  `,
+  ).run(erro.slice(0, 500), produtoId);
+  if (tentativaId !== undefined) {
+    db.prepare(
+      `UPDATE tentativas_de_envio
+       SET status = 'ambiguous', motivo = ?, finalizado_em = CURRENT_TIMESTAMP
+       WHERE id = ? AND produto_id = ? AND status = 'sending'`,
+    ).run(erro.slice(0, 500), tentativaId, produtoId);
+  }
 }
 
 export function liberarReservaEnvio(produtoId: number) {
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE produtos
-    SET status_fila = 'pending', envio_iniciado_em = NULL
+    SET status_fila = 'pending', envio_iniciado_em = NULL,
+        origem_envio_em_andamento = NULL
     WHERE id = ? AND enviado = 0 AND status_fila = 'sending'
-  `).run(produtoId);
+  `,
+  ).run(produtoId);
+}
+
+export function iniciarEnvioManual(produtoId: number): ReservaEnvio | undefined {
+  return db.transaction(() => {
+    const existente = buscarProdutoPorId(produtoId);
+    if (!existente) return undefined;
+    db.prepare(
+      `UPDATE produtos
+       SET status_fila = 'sending', envio_iniciado_em = CURRENT_TIMESTAMP,
+           origem_envio_em_andamento = 'manual', ultimo_erro_envio = NULL
+       WHERE id = ?`,
+    ).run(produtoId);
+    const tentativa = db
+      .prepare(
+        `INSERT INTO tentativas_de_envio (produto_id, origem, status)
+         VALUES (?, 'manual', 'sending') RETURNING *`,
+      )
+      .get(produtoId) as TentativaEnvio;
+    return { produto: buscarProdutoPorId(produtoId) as Produto, tentativa };
+  })();
+}
+
+export type InicioEnvioManualIdempotente =
+  | { tipo: "nova"; reserva: ReservaEnvio }
+  | { tipo: "existente"; tentativa: TentativaEnvio }
+  | { tipo: "conflito" }
+  | { tipo: "ausente" };
+
+export function iniciarEnvioManualIdempotente(
+  produtoId: number,
+  chave: string,
+): InicioEnvioManualIdempotente {
+  const transacao = db.transaction(() => {
+    const existente = db
+      .prepare(
+        `SELECT produto_id, tentativa_id
+         FROM idempotencias_reenvio_manual WHERE chave = ?`,
+      )
+      .get(chave) as { produto_id: number; tentativa_id: number } | undefined;
+    if (existente) {
+      if (existente.produto_id !== produtoId) return { tipo: "conflito" } as const;
+      const tentativa = db
+        .prepare(`SELECT * FROM tentativas_de_envio WHERE id = ?`)
+        .get(existente.tentativa_id) as TentativaEnvio;
+      return { tipo: "existente", tentativa } as const;
+    }
+
+    const produto = buscarProdutoPorId(produtoId);
+    if (!produto) return { tipo: "ausente" } as const;
+    db.prepare(
+      `UPDATE produtos
+       SET status_fila = 'sending', envio_iniciado_em = CURRENT_TIMESTAMP,
+           origem_envio_em_andamento = 'manual', ultimo_erro_envio = NULL
+       WHERE id = ?`,
+    ).run(produtoId);
+    const tentativa = db
+      .prepare(
+        `INSERT INTO tentativas_de_envio (produto_id, origem, status)
+         VALUES (?, 'manual', 'sending') RETURNING *`,
+      )
+      .get(produtoId) as TentativaEnvio;
+    db.prepare(
+      `INSERT INTO idempotencias_reenvio_manual (chave, produto_id, tentativa_id)
+       VALUES (?, ?, ?)`,
+    ).run(chave, produtoId, tentativa.id);
+    return {
+      tipo: "nova",
+      reserva: { produto: buscarProdutoPorId(produtoId) as Produto, tentativa },
+    } as const;
+  });
+
+  return transacao.immediate();
+}
+
+export function listarTentativasEnvio(produtoId: number): TentativaEnvio[] {
+  return db
+    .prepare(
+      `SELECT * FROM tentativas_de_envio WHERE produto_id = ? ORDER BY id DESC`,
+    )
+    .all(produtoId) as TentativaEnvio[];
+}
+
+export function buscarTentativaEnvioPorId(id: number): TentativaEnvio | undefined {
+  return db
+    .prepare(`SELECT * FROM tentativas_de_envio WHERE id = ?`)
+    .get(id) as TentativaEnvio | undefined;
+}
+
+export function recuperarEnviosAbandonados(): number {
+  const token = randomUUID();
+  if (!adquirirLockExecucao("whatsapp_envio", token, 30_000)) return 0;
+  const motivo = "Envio interrompido sem confirmação; revisão manual necessária.";
+  try {
+    return db.transaction(() => {
+      const produtos = db
+        .prepare(`SELECT * FROM produtos WHERE status_fila = 'sending'`)
+        .all() as Produto[];
+      for (const produto of produtos) {
+        db.prepare(
+          `UPDATE produtos
+           SET status_fila = 'ambiguous', ultimo_erro_envio = ?,
+               envio_iniciado_em = NULL, origem_envio_em_andamento = NULL
+           WHERE id = ?`,
+        ).run(motivo, produto.id);
+        const atualizada = db
+          .prepare(
+            `UPDATE tentativas_de_envio
+             SET status = 'ambiguous', motivo = ?, finalizado_em = CURRENT_TIMESTAMP
+             WHERE id = (
+               SELECT id FROM tentativas_de_envio
+               WHERE produto_id = ? AND status = 'sending' ORDER BY id DESC LIMIT 1
+             )`,
+          )
+          .run(motivo, produto.id);
+        if (atualizada.changes === 0) {
+          db.prepare(
+            `INSERT INTO tentativas_de_envio
+             (produto_id, origem, status, motivo, finalizado_em)
+             VALUES (?, ?, 'ambiguous', ?, CURRENT_TIMESTAMP)`,
+          ).run(produto.id, produto.origem_envio_em_andamento ?? "automatico", motivo);
+        }
+      }
+      return produtos.length;
+    })();
+  } finally {
+    liberarLockExecucao("whatsapp_envio", token);
+  }
+}
+
+export function adquirirLockExecucao(
+  nome: string,
+  token: string,
+  duracaoMs: number,
+): boolean {
+  const agora = Date.now();
+  const resultado = db
+    .prepare(
+      `INSERT INTO locks_execucao (nome, token, expira_em_ms)
+       VALUES (?, ?, ?)
+       ON CONFLICT(nome) DO UPDATE SET token = excluded.token,
+         expira_em_ms = excluded.expira_em_ms, adquirido_em = CURRENT_TIMESTAMP
+       WHERE locks_execucao.expira_em_ms <= ?`,
+    )
+    .run(nome, token, agora + duracaoMs, agora);
+  return resultado.changes === 1;
+}
+
+export function renovarLockExecucao(
+  nome: string,
+  token: string,
+  duracaoMs: number,
+): boolean {
+  const resultado = db.prepare(
+    `UPDATE locks_execucao SET expira_em_ms = ? WHERE nome = ? AND token = ?`,
+  ).run(Date.now() + duracaoMs, nome, token);
+  return resultado.changes === 1;
+}
+
+export function liberarLockExecucao(nome: string, token: string) {
+  db.prepare(`DELETE FROM locks_execucao WHERE nome = ? AND token = ?`).run(nome, token);
 }
 
 export function enviosHoje(): number {
@@ -275,13 +552,21 @@ export interface IntegrationView {
 }
 
 export function listarIntegracoes(): IntegrationView[] {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT c.key, c.nome, c.available, s.active, s.status,
            c.capabilities, s.last_connected_at, s.last_checked_at, s.last_error
     FROM integration_catalog c
     JOIN store_integrations s ON s.integration_key = c.key
     ORDER BY c.key
-  `).all() as Array<Omit<IntegrationView, "configured" | "capabilities"> & { capabilities: string }>;
+  `,
+    )
+    .all() as Array<
+    Omit<IntegrationView, "configured" | "capabilities"> & {
+      capabilities: string;
+    }
+  >;
 
   return rows.map((row) => ({
     ...row,
@@ -293,7 +578,9 @@ export function listarIntegracoes(): IntegrationView[] {
 }
 
 export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     UPDATE store_integrations
     SET active = ?,
     previous_status = CASE WHEN ? = 0 THEN status ELSE previous_status END,
@@ -304,7 +591,9 @@ export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
     END,
     atualizado_em = CURRENT_TIMESTAMP
     WHERE integration_key = ?
-  `).run(active ? 1 : 0, active ? 1 : 0, active ? 1 : 0, key);
+  `,
+    )
+    .run(active ? 1 : 0, active ? 1 : 0, active ? 1 : 0, key);
 
   if (result.changes === 0) throw new Error("integração não encontrada");
 }
@@ -314,7 +603,9 @@ export function atualizarStatusIntegracao(
   status: string,
   detalhes: { erro?: string; conectadoEm?: string } = {},
 ) {
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     UPDATE store_integrations
     SET status = ?,
         last_error = ?,
@@ -322,32 +613,44 @@ export function atualizarStatusIntegracao(
         last_checked_at = CURRENT_TIMESTAMP,
         atualizado_em = CURRENT_TIMESTAMP
     WHERE integration_key = ?
-  `).run(
-    status,
-    detalhes.erro ?? null,
-    detalhes.conectadoEm ?? null,
-    key,
-  );
+  `,
+    )
+    .run(status, detalhes.erro ?? null, detalhes.conectadoEm ?? null, key);
 
   if (result.changes === 0) throw new Error("integração não encontrada");
 }
 
 export function integracaoEstaAtiva(key: string): boolean {
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT active FROM store_integrations WHERE integration_key = ?
-  `).get(key) as { active: number } | undefined;
+  `,
+    )
+    .get(key) as { active: number } | undefined;
   return row?.active === 1;
 }
 
 export function obterResumoFila() {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT
       COALESCE(SUM(CASE WHEN status_fila = 'pending' AND enviado = 0 THEN 1 ELSE 0 END), 0) AS pending,
       COALESCE(SUM(CASE WHEN status_fila = 'sending' AND enviado = 0 THEN 1 ELSE 0 END), 0) AS sending,
       COALESCE(SUM(CASE WHEN status_fila = 'sent' OR enviado = 1 THEN 1 ELSE 0 END), 0) AS sent,
-      COALESCE(SUM(CASE WHEN status_fila = 'failed' AND enviado = 0 THEN 1 ELSE 0 END), 0) AS failed
+      COALESCE(SUM(CASE WHEN status_fila = 'failed' AND enviado = 0 THEN 1 ELSE 0 END), 0) AS failed,
+      COALESCE(SUM(CASE WHEN status_fila = 'ambiguous' AND enviado = 0 THEN 1 ELSE 0 END), 0) AS ambiguous
     FROM produtos
-  `).get() as { pending: number; sending: number; sent: number; failed: number };
+  `,
+    )
+    .get() as {
+    pending: number;
+    sending: number;
+    sent: number;
+    failed: number;
+    ambiguous: number;
+  };
 }
 
 export function buscarProdutoPorId(id: number): Produto | undefined {

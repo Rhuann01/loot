@@ -69,6 +69,33 @@ db.exec(`
     FOREIGN KEY (produto_id) REFERENCES produtos(id)
   );
 
+  CREATE TABLE IF NOT EXISTS tentativas_de_envio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    produto_id INTEGER NOT NULL,
+    origem TEXT NOT NULL,
+    status TEXT NOT NULL,
+    motivo TEXT,
+    iniciado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+    finalizado_em TEXT,
+    FOREIGN KEY (produto_id) REFERENCES produtos(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS idempotencias_reenvio_manual (
+    chave TEXT PRIMARY KEY,
+    produto_id INTEGER NOT NULL,
+    tentativa_id INTEGER NOT NULL UNIQUE,
+    criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (produto_id) REFERENCES produtos(id),
+    FOREIGN KEY (tentativa_id) REFERENCES tentativas_de_envio(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS locks_execucao (
+    nome TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    expira_em_ms INTEGER NOT NULL,
+    adquirido_em TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS sessao_afiliado (
     provedor TEXT PRIMARY KEY,
     cookie TEXT NOT NULL,
@@ -212,6 +239,7 @@ const colunasNovas = [
   ["tentativas_envio", "INTEGER NOT NULL DEFAULT 0"],
   ["ultimo_erro_envio", "TEXT"],
   ["envio_iniciado_em", "TEXT"],
+  ["origem_envio_em_andamento", "TEXT"],
 ] as const;
 
 for (const [nome, definicao] of colunasNovas) {
@@ -233,6 +261,8 @@ const defaults: Record<string, string> = {
   horarios_envio: JSON.stringify(["05:00", "12:00", "15:00", "20:00"]),
   quantidade_por_execucao: "3",
   janela_fallback_dias: "3",
+  intervalo_entre_mensagens_ms: "3000",
+  whatsapp_ultima_mensagem_em_ms: "0",
   scraper_ultima_tentativa: "",
   scraper_ultima_sucesso: "",
   scraper_ultimo_resultado: "",
