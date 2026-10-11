@@ -62,6 +62,26 @@ function criarProduto(codigo: string): number {
     .get(codigo) as { id: number }).id;
 }
 
+function criarProdutoComLinks(
+  codigo: string,
+  linkOriginal: string,
+  linkAfiliado: string,
+): number {
+  salvarProduto({
+    source_key: "mercado_livre",
+    external_product_id: codigo,
+    nome: `Produto ${codigo}`,
+    preco_atual: "80",
+    preco_original: "100",
+    desconto_percentual: 50,
+    link_original: linkOriginal,
+    link_afiliado: linkAfiliado,
+  });
+  return (db
+    .prepare("SELECT id FROM produtos WHERE external_product_id = ?")
+    .get(codigo) as { id: number }).id;
+}
+
 async function esperarArquivo(caminho: string) {
   for (let tentativa = 0; tentativa < 100; tentativa++) {
     if (existsSync(caminho)) return;
@@ -229,6 +249,133 @@ try {
   });
   assert.equal(buscarProdutoPorId(falhaAutomaticaId)?.status_fila, "failed");
   assert.equal(listarTentativasEnvio(falhaAutomaticaId)[0]?.status, "failed");
+
+  limparBanco();
+  setConfig("auto_envio_ativo", "true");
+  const linkOriginalSemAfiliacao = "https://example.test/original-sem-afiliacao";
+  const falhaLinkAfiliadoId = criarProdutoComLinks(
+    "MLB-AUTO-LINK-AFILIADO-FALHOU",
+    linkOriginalSemAfiliacao,
+    linkOriginalSemAfiliacao,
+  );
+  let enviosComFalhaDeLink = 0;
+  await enviarLote(1, async () => {
+    enviosComFalhaDeLink += 1;
+  });
+  assert.equal(enviosComFalhaDeLink, 0, "não deve enviar usando o link original");
+  assert.equal(buscarProdutoPorId(falhaLinkAfiliadoId)?.status_fila, "failed");
+  assert.equal(listarTentativasEnvio(falhaLinkAfiliadoId)[0]?.status, "failed");
+  assert.match(
+    buscarProdutoPorId(falhaLinkAfiliadoId)?.ultimo_erro_envio ?? "",
+    /link afiliado/i,
+  );
+
+  limparBanco();
+  setConfig("auto_envio_ativo", "true");
+  const linkAfiliadoAutomaticoValido = "https://example.test/afiliado-automatico-valido";
+  const envioAutomaticoValidoId = criarProdutoComLinks(
+    "MLB-AUTO-LINK-AFILIADO-VALIDO",
+    "https://example.test/original-automatico-valido",
+    linkAfiliadoAutomaticoValido,
+  );
+  let linkAfiliadoAutomaticoEnviado: string | undefined;
+  await enviarLote(1, async (produto) => {
+    linkAfiliadoAutomaticoEnviado = produto.link_afiliado;
+  });
+  assert.equal(linkAfiliadoAutomaticoEnviado, linkAfiliadoAutomaticoValido);
+  assert.equal(buscarProdutoPorId(envioAutomaticoValidoId)?.status_fila, "sent");
+
+  limparBanco();
+  const linkOriginalReenvio = "https://example.test/original-reenvio";
+  const reenvioSemLinkAfiliadoId = criarProdutoComLinks(
+    "MLB-MANUAL-SEM-LINK-AFILIADO",
+    linkOriginalReenvio,
+    "",
+  );
+  let enviosManuaisBloqueados = 0;
+  assert.equal(
+    await reenviarManualIdempotente(
+      reenvioSemLinkAfiliadoId,
+      "manual-sem-link-afiliado",
+      async () => {
+        enviosManuaisBloqueados += 1;
+      },
+    ),
+    "failed",
+  );
+  assert.equal(enviosManuaisBloqueados, 0, "reenvio inválido não deve chegar ao WhatsApp");
+  assert.equal(buscarProdutoPorId(reenvioSemLinkAfiliadoId)?.status_fila, "failed");
+  assert.equal(listarTentativasEnvio(reenvioSemLinkAfiliadoId)[0]?.status, "failed");
+
+  limparBanco();
+  const reenvioComLinkAfiliadoEmBrancoId = criarProdutoComLinks(
+    "MLB-MANUAL-LINK-AFILIADO-EM-BRANCO",
+    "https://example.test/original-em-branco",
+    "   ",
+  );
+  let enviosManuaisComLinkEmBranco = 0;
+  assert.equal(
+    await reenviarManualIdempotente(
+      reenvioComLinkAfiliadoEmBrancoId,
+      "manual-link-afiliado-em-branco",
+      async () => {
+        enviosManuaisComLinkEmBranco += 1;
+      },
+    ),
+    "failed",
+  );
+  assert.equal(enviosManuaisComLinkEmBranco, 0, "link em branco não pode ser reenviado");
+  assert.equal(
+    buscarProdutoPorId(reenvioComLinkAfiliadoEmBrancoId)?.status_fila,
+    "failed",
+  );
+  assert.equal(
+    listarTentativasEnvio(reenvioComLinkAfiliadoEmBrancoId)[0]?.status,
+    "failed",
+  );
+
+  limparBanco();
+  const linkOriginalIgualAoAfiliado = "https://example.test/original-igual";
+  const reenvioComLinkOriginalId = criarProdutoComLinks(
+    "MLB-MANUAL-LINK-ORIGINAL",
+    linkOriginalIgualAoAfiliado,
+    linkOriginalIgualAoAfiliado,
+  );
+  let enviosManuaisComLinkOriginal = 0;
+  assert.equal(
+    await reenviarManualIdempotente(
+      reenvioComLinkOriginalId,
+      "manual-link-original",
+      async () => {
+        enviosManuaisComLinkOriginal += 1;
+      },
+    ),
+    "failed",
+  );
+  assert.equal(enviosManuaisComLinkOriginal, 0, "link original não pode ser reenviado");
+  assert.equal(buscarProdutoPorId(reenvioComLinkOriginalId)?.status_fila, "failed");
+  assert.equal(listarTentativasEnvio(reenvioComLinkOriginalId)[0]?.status, "failed");
+
+  limparBanco();
+  const linkAfiliadoValido = "https://example.test/afiliado-valido";
+  const reenvioComLinkAfiliadoId = criarProdutoComLinks(
+    "MLB-MANUAL-LINK-AFILIADO-VALIDO",
+    "https://example.test/original-valido",
+    linkAfiliadoValido,
+  );
+  let linkEnviado: string | undefined;
+  assert.equal(
+    await reenviarManualIdempotente(
+      reenvioComLinkAfiliadoId,
+      "manual-link-afiliado-valido",
+      async (produto) => {
+        linkEnviado = produto.link_afiliado;
+      },
+    ),
+    "sent",
+  );
+  assert.equal(linkEnviado, linkAfiliadoValido);
+  assert.equal(buscarProdutoPorId(reenvioComLinkAfiliadoId)?.status_fila, "sent");
 
   limparBanco();
   setConfig("auto_envio_ativo", "true");

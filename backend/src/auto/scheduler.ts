@@ -51,10 +51,16 @@ export async function enviarLote(
                 linkOriginal,
               );
               atualizarLinkAfiliado(produto.external_product_id, linkAfiliado);
-            } catch {
+            } catch (erro) {
+              const mensagemErro =
+                `Falha ao gerar link afiliado: ${
+                  erro instanceof Error ? erro.message : String(erro)
+                }`;
               console.warn(
-                `não foi possível gerar link afiliado para ${produto.id}; usando o link original`,
+                `não foi possível gerar link afiliado para ${produto.id}; envio interrompido`,
               );
+              marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id);
+              return false;
             }
           }
 
