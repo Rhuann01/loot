@@ -6,3 +6,4 @@ backend/.env
 frontend/dist/
 EOF
 backend/docs/
+.env
