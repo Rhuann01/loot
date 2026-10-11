@@ -52,6 +52,19 @@ export async function reenviarManualIdempotente(
     if (!tentativaAtual) return "ambiguous";
     if (tentativaAtual.status !== "sending") return resultadoDaTentativa(tentativaAtual);
 
+    if (
+      produto.source_key === "mercado_livre" &&
+      (!produto.link_afiliado.trim() || produto.link_afiliado === produto.link_original)
+    ) {
+      marcarFalhaEnvio(
+        produto.id,
+        "Link afiliado do Mercado Livre ausente ou igual ao link original.",
+        tentativa.id,
+        true,
+      );
+      return "failed";
+    }
+
     try {
       await aguardarIntervaloAntesDaMensagem();
       await enviar({
