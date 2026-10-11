@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -26,15 +32,12 @@ const {
   salvarProduto,
   setConfig,
 } = await import("../src/db/queries.js");
-const { executarEnvioProtegido, tentarExecutarLoteAutomatico } = await import(
-  "../src/whatsapp/dispatch.js"
-);
-const { enviarLote, obterConfigScheduler, salvarConfigScheduler } = await import(
-  "../src/auto/scheduler.js"
-);
-const { reenviarManualIdempotente, statusHttpReenvioManual } = await import(
-  "../src/whatsapp/manual.js"
-);
+const { executarEnvioProtegido, tentarExecutarLoteAutomatico } =
+  await import("../src/whatsapp/dispatch.js");
+const { enviarLote, obterConfigScheduler, salvarConfigScheduler } =
+  await import("../src/auto/scheduler.js");
+const { reenviarManualIdempotente, statusHttpReenvioManual } =
+  await import("../src/whatsapp/manual.js");
 
 function limparBanco() {
   db.exec(
@@ -57,9 +60,11 @@ function criarProduto(codigo: string): number {
     desconto_percentual: 50,
     link_afiliado: `https://example.test/${codigo}`,
   });
-  return (db
-    .prepare("SELECT id FROM produtos WHERE external_product_id = ?")
-    .get(codigo) as { id: number }).id;
+  return (
+    db
+      .prepare("SELECT id FROM produtos WHERE external_product_id = ?")
+      .get(codigo) as { id: number }
+  ).id;
 }
 
 function criarProdutoComLinks(
@@ -77,9 +82,11 @@ function criarProdutoComLinks(
     link_original: linkOriginal,
     link_afiliado: linkAfiliado,
   });
-  return (db
-    .prepare("SELECT id FROM produtos WHERE external_product_id = ?")
-    .get(codigo) as { id: number }).id;
+  return (
+    db
+      .prepare("SELECT id FROM produtos WHERE external_product_id = ?")
+      .get(codigo) as { id: number }
+  ).id;
 }
 
 async function esperarArquivo(caminho: string) {
@@ -95,7 +102,8 @@ function executarEnvioEmProcesso(
   iniciarEm: string,
   resultadoEm: string,
 ): Promise<void> {
-  const worker = new URL("./envio-protegido-worker.js", import.meta.url).pathname;
+  const worker = new URL("./envio-protegido-worker.js", import.meta.url)
+    .pathname;
   const processo = spawn(process.execPath, [worker], {
     cwd: diretorioTeste,
     env: {
@@ -119,7 +127,8 @@ function executarLoteEmProcesso(
   iniciarEm: string,
   resultadoEm: string,
 ): Promise<void> {
-  const worker = new URL("./lote-automatico-worker.js", import.meta.url).pathname;
+  const worker = new URL("./lote-automatico-worker.js", import.meta.url)
+    .pathname;
   const processo = spawn(process.execPath, [worker], {
     cwd: diretorioTeste,
     env: {
@@ -145,7 +154,8 @@ function executarReenvioIdempotenteEmProcesso(
   produtoId: number,
   chave: string,
 ): Promise<void> {
-  const worker = new URL("./reenvio-idempotente-worker.js", import.meta.url).pathname;
+  const worker = new URL("./reenvio-idempotente-worker.js", import.meta.url)
+    .pathname;
   const processo = spawn(process.execPath, [worker], {
     cwd: diretorioTeste,
     env: {
@@ -161,7 +171,8 @@ function executarReenvioIdempotenteEmProcesso(
     processo.once("error", reject);
     processo.once("close", (codigo) => {
       if (codigo === 0) resolve();
-      else reject(new Error(`worker de reenvio idempotente falhou (${codigo})`));
+      else
+        reject(new Error(`worker de reenvio idempotente falhou (${codigo})`));
     });
   });
 }
@@ -195,15 +206,17 @@ try {
 
   limparBanco();
   const manualId = criarProduto("MLB-MANUAL");
-  db.prepare("UPDATE produtos SET tentativas_envio = 3 WHERE id = ?").run(manualId);
+  db.prepare("UPDATE produtos SET tentativas_envio = 3 WHERE id = ?").run(
+    manualId,
+  );
   const manual = iniciarEnvioManual(manualId);
   assert.equal(manual?.produto.tentativas_envio, 3);
   assert.equal(manual?.produto.status_fila, "sending");
   assert.equal(manual?.tentativa.origem, "manual");
 
-  db.prepare("UPDATE produtos SET enviado = 1, status_fila = 'sent' WHERE id = ?").run(
-    manualId,
-  );
+  db.prepare(
+    "UPDATE produtos SET enviado = 1, status_fila = 'sent' WHERE id = ?",
+  ).run(manualId);
   const reenvioManual = iniciarEnvioManual(manualId);
   marcarFalhaEnvio(
     manualId,
@@ -212,10 +225,7 @@ try {
     true,
   );
   assert.equal(buscarProdutoPorId(manualId)?.status_fila, "sent");
-  assert.equal(
-    listarTentativasEnvio(manualId)[0]?.status,
-    "failed",
-  );
+  assert.equal(listarTentativasEnvio(manualId)[0]?.status, "failed");
 
   limparBanco();
   const falhaId = criarProduto("MLB-FALHA-CONHECIDA");
@@ -229,10 +239,18 @@ try {
   const ambiguoId = criarProduto("MLB-FALHA-AMBIGUA");
   const ambiguo = iniciarEnvioManual(ambiguoId);
   assert.ok(ambiguo);
-  marcarEnvioAmbiguo(ambiguoId, "socket fechou após o despacho", ambiguo.tentativa.id);
+  marcarEnvioAmbiguo(
+    ambiguoId,
+    "socket fechou após o despacho",
+    ambiguo.tentativa.id,
+  );
   assert.equal(buscarProdutoPorId(ambiguoId)?.status_fila, "ambiguous");
   assert.equal(listarTentativasEnvio(ambiguoId)[0]?.status, "ambiguous");
-  assert.equal(reservarProdutoParaEnvio(), undefined, "ambiguous não pode voltar à fila automática");
+  assert.equal(
+    reservarProdutoParaEnvio(),
+    undefined,
+    "ambiguous não pode voltar à fila automática",
+  );
   assert.deepEqual(obterResumoFila(), {
     pending: 0,
     sending: 0,
@@ -252,7 +270,8 @@ try {
 
   limparBanco();
   setConfig("auto_envio_ativo", "true");
-  const linkOriginalSemAfiliacao = "https://example.test/original-sem-afiliacao";
+  const linkOriginalSemAfiliacao =
+    "https://example.test/original-sem-afiliacao";
   const falhaLinkAfiliadoId = criarProdutoComLinks(
     "MLB-AUTO-LINK-AFILIADO-FALHOU",
     linkOriginalSemAfiliacao,
@@ -262,7 +281,11 @@ try {
   await enviarLote(1, async () => {
     enviosComFalhaDeLink += 1;
   });
-  assert.equal(enviosComFalhaDeLink, 0, "não deve enviar usando o link original");
+  assert.equal(
+    enviosComFalhaDeLink,
+    0,
+    "não deve enviar usando o link original",
+  );
   assert.equal(buscarProdutoPorId(falhaLinkAfiliadoId)?.status_fila, "failed");
   assert.equal(listarTentativasEnvio(falhaLinkAfiliadoId)[0]?.status, "failed");
   assert.match(
@@ -272,7 +295,27 @@ try {
 
   limparBanco();
   setConfig("auto_envio_ativo", "true");
-  const linkAfiliadoAutomaticoValido = "https://example.test/afiliado-automatico-valido";
+
+  const linkOriginalVazio = "https://example.test/original-vazio";
+  const linkVazioId = criarProdutoComLinks(
+    "MLB-AUTO-LINK-VAZIO",
+    linkOriginalVazio,
+    "",
+  );
+
+  let enviosComLinkVazio = 0;
+
+  await enviarLote(1, async () => {
+    enviosComLinkVazio += 1;
+  });
+
+  assert.equal(enviosComLinkVazio, 0);
+  assert.equal(buscarProdutoPorId(linkVazioId)?.status_fila, "failed");
+  assert.equal(listarTentativasEnvio(linkVazioId)[0]?.status, "failed");
+  limparBanco();
+  setConfig("auto_envio_ativo", "true");
+  const linkAfiliadoAutomaticoValido =
+    "https://example.test/afiliado-automatico-valido";
   const envioAutomaticoValidoId = criarProdutoComLinks(
     "MLB-AUTO-LINK-AFILIADO-VALIDO",
     "https://example.test/original-automatico-valido",
@@ -283,7 +326,10 @@ try {
     linkAfiliadoAutomaticoEnviado = produto.link_afiliado;
   });
   assert.equal(linkAfiliadoAutomaticoEnviado, linkAfiliadoAutomaticoValido);
-  assert.equal(buscarProdutoPorId(envioAutomaticoValidoId)?.status_fila, "sent");
+  assert.equal(
+    buscarProdutoPorId(envioAutomaticoValidoId)?.status_fila,
+    "sent",
+  );
 
   limparBanco();
   const linkOriginalReenvio = "https://example.test/original-reenvio";
@@ -303,9 +349,19 @@ try {
     ),
     "failed",
   );
-  assert.equal(enviosManuaisBloqueados, 0, "reenvio inválido não deve chegar ao WhatsApp");
-  assert.equal(buscarProdutoPorId(reenvioSemLinkAfiliadoId)?.status_fila, "failed");
-  assert.equal(listarTentativasEnvio(reenvioSemLinkAfiliadoId)[0]?.status, "failed");
+  assert.equal(
+    enviosManuaisBloqueados,
+    0,
+    "reenvio inválido não deve chegar ao WhatsApp",
+  );
+  assert.equal(
+    buscarProdutoPorId(reenvioSemLinkAfiliadoId)?.status_fila,
+    "failed",
+  );
+  assert.equal(
+    listarTentativasEnvio(reenvioSemLinkAfiliadoId)[0]?.status,
+    "failed",
+  );
 
   limparBanco();
   const reenvioComLinkAfiliadoEmBrancoId = criarProdutoComLinks(
@@ -324,7 +380,11 @@ try {
     ),
     "failed",
   );
-  assert.equal(enviosManuaisComLinkEmBranco, 0, "link em branco não pode ser reenviado");
+  assert.equal(
+    enviosManuaisComLinkEmBranco,
+    0,
+    "link em branco não pode ser reenviado",
+  );
   assert.equal(
     buscarProdutoPorId(reenvioComLinkAfiliadoEmBrancoId)?.status_fila,
     "failed",
@@ -352,9 +412,19 @@ try {
     ),
     "failed",
   );
-  assert.equal(enviosManuaisComLinkOriginal, 0, "link original não pode ser reenviado");
-  assert.equal(buscarProdutoPorId(reenvioComLinkOriginalId)?.status_fila, "failed");
-  assert.equal(listarTentativasEnvio(reenvioComLinkOriginalId)[0]?.status, "failed");
+  assert.equal(
+    enviosManuaisComLinkOriginal,
+    0,
+    "link original não pode ser reenviado",
+  );
+  assert.equal(
+    buscarProdutoPorId(reenvioComLinkOriginalId)?.status_fila,
+    "failed",
+  );
+  assert.equal(
+    listarTentativasEnvio(reenvioComLinkOriginalId)[0]?.status,
+    "failed",
+  );
 
   limparBanco();
   const linkAfiliadoValido = "https://example.test/afiliado-valido";
@@ -375,7 +445,10 @@ try {
     "sent",
   );
   assert.equal(linkEnviado, linkAfiliadoValido);
-  assert.equal(buscarProdutoPorId(reenvioComLinkAfiliadoId)?.status_fila, "sent");
+  assert.equal(
+    buscarProdutoPorId(reenvioComLinkAfiliadoId)?.status_fila,
+    "sent",
+  );
 
   limparBanco();
   setConfig("auto_envio_ativo", "true");
@@ -383,8 +456,14 @@ try {
   await enviarLote(1, async () => {
     throw new Error("socket fechou após o despacho");
   });
-  assert.equal(buscarProdutoPorId(ambiguoAutomaticoId)?.status_fila, "ambiguous");
-  assert.equal(listarTentativasEnvio(ambiguoAutomaticoId)[0]?.status, "ambiguous");
+  assert.equal(
+    buscarProdutoPorId(ambiguoAutomaticoId)?.status_fila,
+    "ambiguous",
+  );
+  assert.equal(
+    listarTentativasEnvio(ambiguoAutomaticoId)[0]?.status,
+    "ambiguous",
+  );
   assert.equal(reservarProdutoParaEnvio(), undefined);
 
   limparBanco();
@@ -406,7 +485,8 @@ try {
     "reenvio-1",
   );
   assert.equal(inicioIdempotente.tipo, "nova");
-  if (inicioIdempotente.tipo !== "nova") throw new Error("tentativa nova esperada");
+  if (inicioIdempotente.tipo !== "nova")
+    throw new Error("tentativa nova esperada");
   const repeticaoEmAndamento = iniciarEnvioManualIdempotente(
     idempotenteId,
     "reenvio-1",
@@ -419,7 +499,10 @@ try {
   assert.equal(listarTentativasEnvio(idempotenteId).length, 1);
 
   marcarComoEnviado(idempotenteId, inicioIdempotente.reserva.tentativa.id);
-  const repeticaoComSucesso = iniciarEnvioManualIdempotente(idempotenteId, "reenvio-1");
+  const repeticaoComSucesso = iniciarEnvioManualIdempotente(
+    idempotenteId,
+    "reenvio-1",
+  );
   assert.equal(repeticaoComSucesso.tipo, "existente");
   if (repeticaoComSucesso.tipo !== "existente") {
     throw new Error("resultado existente esperado");
@@ -435,7 +518,10 @@ try {
 
   limparBanco();
   const falhaIdempotenteId = criarProduto("MLB-IDEMPOTENTE-FALHA");
-  const inicioFalha = iniciarEnvioManualIdempotente(falhaIdempotenteId, "reenvio-falha");
+  const inicioFalha = iniciarEnvioManualIdempotente(
+    falhaIdempotenteId,
+    "reenvio-falha",
+  );
   assert.equal(inicioFalha.tipo, "nova");
   if (inicioFalha.tipo !== "nova") throw new Error("tentativa nova esperada");
   marcarFalhaEnvio(
@@ -448,7 +534,8 @@ try {
     "reenvio-falha",
   );
   assert.equal(repeticaoFalha.tipo, "existente");
-  if (repeticaoFalha.tipo !== "existente") throw new Error("resultado existente esperado");
+  if (repeticaoFalha.tipo !== "existente")
+    throw new Error("resultado existente esperado");
   assert.equal(repeticaoFalha.tentativa.status, "failed");
 
   limparBanco();
@@ -477,7 +564,10 @@ try {
 
   limparBanco();
   const concorrenteId = criarProduto("MLB-IDEMPOTENTE-CONCORRENTE");
-  const iniciarReenviosEm = join(diretorioTeste, "iniciar-reenvios-idempotentes");
+  const iniciarReenviosEm = join(
+    diretorioTeste,
+    "iniciar-reenvios-idempotentes",
+  );
   const reenvioProntoA = join(diretorioTeste, "reenvio-a-pronto");
   const reenvioProntoB = join(diretorioTeste, "reenvio-b-pronto");
   const reenvioResultadoA = join(diretorioTeste, "reenvio-a-resultado");
@@ -496,27 +586,45 @@ try {
     concorrenteId,
     "reenvio-concorrente",
   );
-  await Promise.all([esperarArquivo(reenvioProntoA), esperarArquivo(reenvioProntoB)]);
+  await Promise.all([
+    esperarArquivo(reenvioProntoA),
+    esperarArquivo(reenvioProntoB),
+  ]);
   writeFileSync(iniciarReenviosEm, "iniciar");
   await Promise.all([reenvioA, reenvioB]);
-  const reenvios = [reenvioResultadoA, reenvioResultadoB].map((resultadoEm) =>
-    JSON.parse(readFileSync(resultadoEm, "utf8")) as { tipo: string; tentativaId: number },
+  const reenvios = [reenvioResultadoA, reenvioResultadoB].map(
+    (resultadoEm) =>
+      JSON.parse(readFileSync(resultadoEm, "utf8")) as {
+        tipo: string;
+        tentativaId: number;
+      },
   );
   assert.equal(reenvios.filter((reenvio) => reenvio.tipo === "nova").length, 1);
-  assert.equal(reenvios.filter((reenvio) => reenvio.tipo === "existente").length, 1);
+  assert.equal(
+    reenvios.filter((reenvio) => reenvio.tipo === "existente").length,
+    1,
+  );
   assert.equal(new Set(reenvios.map((reenvio) => reenvio.tentativaId)).size, 1);
   assert.equal(listarTentativasEnvio(concorrenteId).length, 1);
 
   limparBanco();
   const manualIdempotenteId = criarProduto("MLB-REENVIO-MANUAL-IDEMPOTENTE");
   assert.equal(
-    await reenviarManualIdempotente(manualIdempotenteId, "manual-sucesso", async () => {}),
+    await reenviarManualIdempotente(
+      manualIdempotenteId,
+      "manual-sucesso",
+      async () => {},
+    ),
     "sent",
   );
   assert.equal(
-    await reenviarManualIdempotente(manualIdempotenteId, "manual-sucesso", async () => {
-      throw new Error("não deve enviar novamente");
-    }),
+    await reenviarManualIdempotente(
+      manualIdempotenteId,
+      "manual-sucesso",
+      async () => {
+        throw new Error("não deve enviar novamente");
+      },
+    ),
     "sent",
   );
   assert.equal(listarTentativasEnvio(manualIdempotenteId).length, 1);
@@ -530,20 +638,32 @@ try {
     "failed",
   );
   assert.equal(
-    await reenviarManualIdempotente(manualFalhaId, "manual-falha", async () => {}),
+    await reenviarManualIdempotente(
+      manualFalhaId,
+      "manual-falha",
+      async () => {},
+    ),
     "failed",
   );
 
   limparBanco();
   const manualAmbiguoId = criarProduto("MLB-REENVIO-MANUAL-AMBIGUO");
   assert.equal(
-    await reenviarManualIdempotente(manualAmbiguoId, "manual-ambiguo", async () => {
-      throw new Error("conexão interrompida após o despacho");
-    }),
+    await reenviarManualIdempotente(
+      manualAmbiguoId,
+      "manual-ambiguo",
+      async () => {
+        throw new Error("conexão interrompida após o despacho");
+      },
+    ),
     "ambiguous",
   );
   assert.equal(
-    await reenviarManualIdempotente(manualAmbiguoId, "manual-ambiguo", async () => {}),
+    await reenviarManualIdempotente(
+      manualAmbiguoId,
+      "manual-ambiguo",
+      async () => {},
+    ),
     "ambiguous",
   );
 
@@ -563,7 +683,11 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(
-    await reenviarManualIdempotente(manualEmAndamentoId, "manual-em-andamento", async () => {}),
+    await reenviarManualIdempotente(
+      manualEmAndamentoId,
+      "manual-em-andamento",
+      async () => {},
+    ),
     "sending",
   );
   liberarEnvio();
@@ -628,8 +752,12 @@ try {
   writeFileSync(iniciarEm, "iniciar");
   await Promise.all([envioA, envioB]);
   const execucoes = [resultadoA, resultadoB]
-    .map((resultadoEm) =>
-      JSON.parse(readFileSync(resultadoEm, "utf8")) as { inicio: number; fim: number },
+    .map(
+      (resultadoEm) =>
+        JSON.parse(readFileSync(resultadoEm, "utf8")) as {
+          inicio: number;
+          fim: number;
+        },
     )
     .sort((a, b) => a.inicio - b.inicio);
   assert.ok(execucoes[1]!.inicio >= execucoes[0]!.fim);
@@ -641,13 +769,22 @@ try {
   const loteProntoB = join(diretorioTeste, "lote-b-pronto");
   const loteResultadoA = join(diretorioTeste, "lote-a-resultado");
   const loteResultadoB = join(diretorioTeste, "lote-b-resultado");
-  const loteA = executarLoteEmProcesso(loteProntoA, iniciarLotesEm, loteResultadoA);
-  const loteB = executarLoteEmProcesso(loteProntoB, iniciarLotesEm, loteResultadoB);
+  const loteA = executarLoteEmProcesso(
+    loteProntoA,
+    iniciarLotesEm,
+    loteResultadoA,
+  );
+  const loteB = executarLoteEmProcesso(
+    loteProntoB,
+    iniciarLotesEm,
+    loteResultadoB,
+  );
   await Promise.all([esperarArquivo(loteProntoA), esperarArquivo(loteProntoB)]);
   writeFileSync(iniciarLotesEm, "iniciar");
   await Promise.all([loteA, loteB]);
-  const lotes = [loteResultadoA, loteResultadoB].map((resultadoEm) =>
-    JSON.parse(readFileSync(resultadoEm, "utf8")) as { executou: boolean },
+  const lotes = [loteResultadoA, loteResultadoB].map(
+    (resultadoEm) =>
+      JSON.parse(readFileSync(resultadoEm, "utf8")) as { executou: boolean },
   );
   assert.equal(
     lotes.filter((lote) => lote.executou).length,
