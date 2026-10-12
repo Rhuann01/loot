@@ -14,6 +14,7 @@ const {
   salvarProduto,
   reservarProdutoParaEnvio,
   setConfig,
+  atualizarLinkAfiliadoPorFonte,
 } = queries;
 
 const limparProdutosAntigos = (
@@ -212,6 +213,65 @@ try {
     ],
     "a limpeza deve preservar produtos recentes, ativos, ambíguos e com histórico",
   );
+
+  limparBanco();
+  criarProduto("SHP-VENCIDA", 50, true);
+  db.prepare(
+    "UPDATE produtos SET oferta_expira_em = CAST(strftime('%s','now') AS INTEGER) - 60 WHERE external_product_id = ?",
+  ).run("SHP-VENCIDA");
+  assert.equal(
+    reservarProdutoParaEnvio(),
+    undefined,
+    "oferta vencida não deve ser reservada",
+  );
+
+  limparBanco();
+  criarProduto("SHP-VALIDA", 50, true);
+  db.prepare(
+    "UPDATE produtos SET oferta_expira_em = CAST(strftime('%s','now') AS INTEGER) + 3600 WHERE external_product_id = ?",
+  ).run("SHP-VALIDA");
+  assert.equal(reservarProdutoParaEnvio()?.external_product_id, "SHP-VALIDA");
+
+  limparBanco();
+  salvarProduto({
+    source_key: "mercado_livre",
+    external_product_id: "123",
+    nome: "ML",
+    preco_atual: "80",
+    preco_original: "100",
+    desconto_percentual: 20,
+    link_afiliado: "https://example.test/ml",
+  });
+  salvarProduto({
+    source_key: "shopee",
+    external_product_id: "123",
+    nome: "SH",
+    preco_atual: "80",
+    preco_original: "100",
+    desconto_percentual: 20,
+    link_afiliado: "https://example.test/shopee",
+  });
+  atualizarLinkAfiliadoPorFonte("shopee", "123", "https://shope.ee/novo");
+
+  const linhaShopee = db
+    .prepare(
+      "SELECT link_afiliado FROM produtos WHERE source_key = ? AND external_product_id = ?",
+    )
+    .get("shopee", "123") as { link_afiliado: string } | undefined;
+  const linhaMercadoLivre = db
+    .prepare(
+      "SELECT link_afiliado FROM produtos WHERE source_key = ? AND external_product_id = ?",
+    )
+    .get("mercado_livre", "123") as { link_afiliado: string } | undefined;
+  const contagem123 = db
+    .prepare(
+      "SELECT COUNT(*) as total FROM produtos WHERE external_product_id = '123'",
+    )
+    .get() as { total: number };
+
+  assert.equal(linhaShopee?.link_afiliado, "https://shope.ee/novo");
+  assert.equal(linhaMercadoLivre?.link_afiliado, "https://example.test/ml");
+  assert.equal(contagem123.total, 2);
 
   console.log("Resultado: fila de ofertas passou");
 } finally {

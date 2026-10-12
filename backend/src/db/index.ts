@@ -216,8 +216,8 @@ const inserirIntegracao = db.prepare(`
 for (const integracao of integrations) inserirIntegracao.run(...integracao);
 
 db.exec(`
-  UPDATE integration_catalog SET available = 1 WHERE key = 'mercado_livre';
-  UPDATE integration_catalog SET available = 0 WHERE key IN ('shopee', 'tiktok_shop');
+  UPDATE integration_catalog SET available = 1 WHERE key IN ('mercado_livre', 'shopee');
+  UPDATE integration_catalog SET available = 0 WHERE key = 'tiktok_shop';
 `);
 
 db.exec(`
@@ -240,6 +240,7 @@ const colunasNovas = [
   ["ultimo_erro_envio", "TEXT"],
   ["envio_iniciado_em", "TEXT"],
   ["origem_envio_em_andamento", "TEXT"],
+  ["oferta_expira_em", "INTEGER"],
 ] as const;
 
 for (const [nome, definicao] of colunasNovas) {

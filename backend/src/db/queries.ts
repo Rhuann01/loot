@@ -21,6 +21,7 @@ export interface Produto {
   ultimo_erro_envio: string | null;
   envio_iniciado_em: string | null;
   origem_envio_em_andamento: OrigemEnvio | null;
+  oferta_expira_em: number | null;
   criado_em: string;
 }
 
@@ -46,6 +47,7 @@ interface NovoProduto {
   link_original?: string;
   link_afiliado: string;
   categoria_id?: string;
+  oferta_expira_em?: number;
 }
 
 export function salvarProduto(produto: NovoProduto) {
@@ -65,13 +67,14 @@ export function salvarProduto(produto: NovoProduto) {
     link_original: produto.link_original ?? null,
     link_afiliado: produto.link_afiliado,
     categoria_id: produto.categoria_id ?? null,
+    oferta_expira_em: produto.oferta_expira_em ?? null,
   };
 
   const inserir = db.prepare(`
     INSERT INTO produtos 
-      (produto_id_ml, source_key, external_product_id, marketplace_origem, nome, preco_atual, preco_original, desconto_percentual, imagem_url, link_original, link_afiliado, categoria_id)
+      (produto_id_ml, source_key, external_product_id, marketplace_origem, nome, preco_atual, preco_original, desconto_percentual, imagem_url, link_original, link_afiliado, categoria_id, oferta_expira_em)
     VALUES 
-      (@produto_id_ml, @source_key, @external_product_id, @marketplace_origem, @nome, @preco_atual, @preco_original, @desconto_percentual, @imagem_url, @link_original, @link_afiliado, @categoria_id)
+      (@produto_id_ml, @source_key, @external_product_id, @marketplace_origem, @nome, @preco_atual, @preco_original, @desconto_percentual, @imagem_url, @link_original, @link_afiliado, @categoria_id, @oferta_expira_em)
     ON CONFLICT(source_key, external_product_id) DO UPDATE SET
       produto_id_ml = excluded.produto_id_ml,
       marketplace_origem = excluded.marketplace_origem,
@@ -80,6 +83,7 @@ export function salvarProduto(produto: NovoProduto) {
       desconto_percentual = excluded.desconto_percentual,
       imagem_url = excluded.imagem_url,
       link_original = COALESCE(excluded.link_original, produtos.link_original),
+      oferta_expira_em = excluded.oferta_expira_em,
       criado_em = CURRENT_TIMESTAMP
   `);
   inserir.run(dados);
@@ -142,6 +146,18 @@ export function atualizarLinkAfiliado(
   ).run(linkAfiliado, produtoIdMl);
 }
 
+export function atualizarLinkAfiliadoPorFonte(
+  sourceKey: string,
+  externalProductId: string,
+  linkAfiliado: string,
+) {
+  db.prepare(
+    `UPDATE produtos
+     SET link_afiliado = ?
+     WHERE source_key = ? AND external_product_id = ?`,
+  ).run(linkAfiliado, sourceKey, externalProductId);
+}
+
 export function listarProdutos(): Produto[] {
   return db
     .prepare(`SELECT * FROM produtos ORDER BY criado_em DESC`)
@@ -160,6 +176,7 @@ export function getMelhoresDescontos(limite: number): Produto[] {
       AND tentativas_envio < 3
       AND desconto_percentual >= ?
       AND datetime(criado_em) >= datetime('now', ?)
+      AND (oferta_expira_em IS NULL OR oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
     ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
     LIMIT ?
   `,
@@ -284,6 +301,7 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
           AND tentativas_envio < 3
           AND desconto_percentual >= ?
           AND datetime(criado_em) >= datetime('now', ?)
+          AND (oferta_expira_em IS NULL OR oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
         ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
         LIMIT 1
       )
