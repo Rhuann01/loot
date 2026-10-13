@@ -12,16 +12,56 @@ import {
   setConfig,
   integracaoEstaAtiva,
   atualizarLinkAfiliadoPorFonte,
+  type Produto,
+  atualizarPrecoProduto,
+  esgotarTentativasProduto,
+  cancelarReservaSemConsumirTentativa,
 } from "../db/queries.js";
+import {
+  consultarOfertaShopeePorItem,
+  decidirRecheca,
+  extrairItemIdShopee,
+  precosDaOfertaAtual,
+  type DecisaoRecheca,
+  type OfertaAtualShopee,
+} from "../integrations/shopee/source.js";
 import { enviarProduto } from "../whatsapp/sender.js";
 import {
   executarEnvioProtegido,
   tentarExecutarLoteAutomatico,
 } from "../whatsapp/dispatch.js";
 
+export interface ResultadoRecheca {
+  decisao: DecisaoRecheca;
+  atual: OfertaAtualShopee | null;
+}
+
+// Pode lançar erro se a consulta falhar (rede/API).
+export type Rechecador = (produto: Produto) => Promise<ResultadoRecheca>;
+
+async function rechecarShopee(produto: Produto): Promise<ResultadoRecheca> {
+  const itemId = extrairItemIdShopee(produto.external_product_id);
+  if (!itemId) {
+    return {
+      decisao: { enviar: false, motivo: "Identificador Shopee inválido" },
+      atual: null,
+    };
+  }
+  const atual = await consultarOfertaShopeePorItem(itemId);
+  const descontoMinimo = Math.max(
+    0,
+    Number(getConfig("desconto_minimo_global") ?? 20) || 0,
+  );
+  return {
+    decisao: decidirRecheca(produto.preco_atual, atual, descontoMinimo),
+    atual,
+  };
+}
+
 export async function enviarLote(
   quantidade: number,
   enviar: typeof enviarProduto = enviarProduto,
+  rechecar: Rechecador = rechecarShopee,
 ) {
   for (let i = 0; i < quantidade; i++) {
     if (getConfig("auto_envio_ativo") !== "true") {
@@ -29,79 +69,128 @@ export async function enviarLote(
       break;
     }
 
-    const enviado = await executarEnvioProtegido(
-      async ({ aguardarIntervaloAntesDaMensagem }) => {
-        if (getConfig("auto_envio_ativo") !== "true") return false;
-        const reserva = reservarProdutoParaEnvioComTentativa();
-        if (!reserva) return false;
-        const { produto, tentativa } = reserva;
+    const resultado = await executarEnvioProtegido<
+      "enviado" | "descartado" | "parar"
+    >(async ({ aguardarIntervaloAntesDaMensagem }) => {
+      if (getConfig("auto_envio_ativo") !== "true") return "parar";
+      const reserva = reservarProdutoParaEnvioComTentativa();
+      if (!reserva) return "parar";
+      const { produto, tentativa } = reserva;
 
-        try {
-          let linkAfiliado = produto.link_afiliado;
+      try {
+        let linkAfiliado = produto.link_afiliado;
 
-          const precisaGerarLink =
-            temAffiliateProvider(produto.source_key) &&
-            (!produto.link_afiliado.trim() ||
-              produto.link_afiliado === produto.link_original);
+        const precisaGerarLink =
+          temAffiliateProvider(produto.source_key) &&
+          (!produto.link_afiliado.trim() ||
+            produto.link_afiliado === produto.link_original);
 
-          if (precisaGerarLink) {
-            try {
-              const linkOriginal = produto.link_original;
-              if (!linkOriginal)
-                throw new Error("URL original do produto ausente");
-              const linkGerado = await getAffiliateProvider(
-                produto.source_key as IntegrationKey,
-              ).generateLink(linkOriginal);
+        if (precisaGerarLink) {
+          try {
+            const linkOriginal = produto.link_original;
+            if (!linkOriginal)
+              throw new Error("URL original do produto ausente");
+            const linkGerado = await getAffiliateProvider(
+              produto.source_key as IntegrationKey,
+            ).generateLink(linkOriginal);
 
-              if (!linkGerado.trim() || linkGerado === linkOriginal) {
-                throw new Error(
-                  "O provedor retornou um link afiliado inválido",
-                );
-              }
-
-              linkAfiliado = linkGerado;
-              atualizarLinkAfiliadoPorFonte(
-                produto.source_key,
-                produto.external_product_id,
-                linkAfiliado,
-              );
-            } catch (erro) {
-              const mensagemErro = `Falha ao gerar link afiliado: ${
-                erro instanceof Error ? erro.message : String(erro)
-              }`;
-              console.warn(
-                `não foi possível gerar link afiliado para ${produto.id}; envio interrompido`,
-              );
-              marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id);
-              return false;
+            if (!linkGerado.trim() || linkGerado === linkOriginal) {
+              throw new Error("O provedor retornou um link afiliado inválido");
             }
-          }
 
-          await aguardarIntervaloAntesDaMensagem();
-          await enviar({
-            nome: produto.nome,
-            preco_atual: produto.preco_atual,
-            preco_original: produto.preco_original,
-            link_afiliado: linkAfiliado,
-            imagem_url: produto.imagem_url,
-          });
-        } catch (erro) {
-          const mensagemErro =
-            erro instanceof Error ? erro.message : String(erro);
-          if (mensagemErro === "WhatsApp não está conectado") {
+            linkAfiliado = linkGerado;
+            atualizarLinkAfiliadoPorFonte(
+              produto.source_key,
+              produto.external_product_id,
+              linkAfiliado,
+            );
+          } catch (erro) {
+            const mensagemErro = `Falha ao gerar link afiliado: ${
+              erro instanceof Error ? erro.message : String(erro)
+            }`;
+            console.warn(
+              `não foi possível gerar link afiliado para ${produto.id}; envio interrompido`,
+            );
             marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id);
-          } else {
-            marcarEnvioAmbiguo(produto.id, mensagemErro, tentativa.id);
+            return "parar";
           }
-          return false;
         }
 
-        marcarComoEnviado(produto.id, tentativa.id);
-        console.log(`enviado: ${produto.nome}`);
-        return true;
-      },
-    );
-    if (!enviado) break;
+        // NOVO: recheca de preço (somente Shopee)
+        let precoAtualEnvio = produto.preco_atual;
+        let precoOriginalEnvio = produto.preco_original;
+
+        if (produto.source_key === "shopee") {
+          let resultadoRecheca: ResultadoRecheca;
+          try {
+            resultadoRecheca = await rechecar(produto);
+          } catch (erro) {
+            const motivo = `Recheca de preço indisponível: ${
+              erro instanceof Error ? erro.message : String(erro)
+            }`;
+            console.warn(
+              `scheduler: recheca da Shopee falhou para ${produto.id}; produto devolvido à fila`,
+            );
+            cancelarReservaSemConsumirTentativa(
+              produto.id,
+              tentativa.id,
+              motivo,
+            );
+            return "parar";
+          }
+
+          const { decisao, atual } = resultadoRecheca;
+          if (!decisao.enviar) {
+            if (atual) {
+              atualizarPrecoProduto(produto.id, precosDaOfertaAtual(atual));
+            }
+            marcarFalhaEnvio(
+              produto.id,
+              `Recheca Shopee: ${decisao.motivo}`,
+              tentativa.id,
+            );
+            if (!atual) esgotarTentativasProduto(produto.id);
+            console.log(
+              `scheduler: ${produto.id} descartado pela recheca (${decisao.motivo})`,
+            );
+            return "descartado";
+          }
+
+          const novos = precosDaOfertaAtual({
+            precoAtual: decisao.precoAtual,
+            descontoPercentual: decisao.descontoPercentual,
+          });
+          if (novos.preco_atual !== produto.preco_atual) {
+            atualizarPrecoProduto(produto.id, novos);
+            precoAtualEnvio = novos.preco_atual;
+            precoOriginalEnvio = novos.preco_original;
+          }
+        }
+
+        await aguardarIntervaloAntesDaMensagem();
+        await enviar({
+          nome: produto.nome,
+          preco_atual: precoAtualEnvio,
+          preco_original: precoOriginalEnvio,
+          link_afiliado: linkAfiliado,
+          imagem_url: produto.imagem_url,
+        });
+      } catch (erro) {
+        const mensagemErro =
+          erro instanceof Error ? erro.message : String(erro);
+        if (mensagemErro === "WhatsApp não está conectado") {
+          marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id);
+        } else {
+          marcarEnvioAmbiguo(produto.id, mensagemErro, tentativa.id);
+        }
+        return "parar";
+      }
+
+      marcarComoEnviado(produto.id, tentativa.id);
+      console.log(`enviado: ${produto.nome}`);
+      return "enviado";
+    });
+    if (resultado === "parar") break;
   }
 }
 

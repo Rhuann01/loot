@@ -865,9 +865,20 @@ try {
     "https://shope.ee/abc123",
   );
   let shopeeLinkEnviadoB: string | undefined;
-  await enviarLote(1, async (produto) => {
-    shopeeLinkEnviadoB = produto.link_afiliado;
-  });
+  await enviarLote(
+    1,
+    async (produto) => {
+      shopeeLinkEnviadoB = produto.link_afiliado;
+    },
+    async () => ({
+      decisao: {
+        enviar: true as const,
+        precoAtual: 80,
+        descontoPercentual: 50,
+      },
+      atual: { precoAtual: 80, descontoPercentual: 50 },
+    }),
+  );
   assert.equal(shopeeLinkEnviadoB, "https://shope.ee/abc123");
   {
     const prodShopeeB = db
@@ -900,6 +911,254 @@ try {
   );
   assert.equal(shopeeEnviosC, 0);
   assert.equal(buscarProdutoPorId(shopeeIdC)?.status_fila, "failed");
+
+  // ---- Recheca de preço da Shopee ----
+  function prepararCasoRecheca() {
+    limparBanco();
+    setConfig("auto_envio_ativo", "true");
+    setConfig("limite_diario", "5");
+  }
+
+  const rechecaOk = (preco: number, desconto: number) => async () => ({
+    decisao: {
+      enviar: true as const,
+      precoAtual: preco,
+      descontoPercentual: desconto,
+    },
+    atual: { precoAtual: preco, descontoPercentual: desconto },
+  });
+
+  // T1: preço igual
+  {
+    prepararCasoRecheca();
+    const id = criarProdutoShopee(
+      "10_10",
+      "https://shopee.com.br/product/10/10",
+      "https://s.shopee.com.br/abc10",
+    );
+    const enviados: string[] = [];
+    await enviarLote(
+      1,
+      async (produto) => {
+        enviados.push(produto.preco_atual);
+      },
+      rechecaOk(80, 50),
+    );
+    assert.deepEqual(enviados, ["80,00"]);
+    assert.equal(buscarProdutoPorId(id)?.status_fila, "sent");
+  }
+
+  // T2: preço caiu
+  {
+    prepararCasoRecheca();
+    const id = criarProdutoShopee(
+      "11_11",
+      "https://shopee.com.br/product/11/11",
+      "https://s.shopee.com.br/abc11",
+    );
+    const enviados: Array<{ atual: string; original: string | null | undefined }> = [];
+    await enviarLote(
+      1,
+      async (produto) => {
+        enviados.push({
+          atual: produto.preco_atual,
+          original: produto.preco_original,
+        });
+      },
+      rechecaOk(64, 60),
+    );
+    assert.deepEqual(enviados, [{ atual: "64,00", original: "160,00" }]);
+    const p = buscarProdutoPorId(id);
+    assert.equal(p?.preco_atual, "64,00");
+    assert.equal(p?.desconto_percentual, 60);
+    assert.equal(p?.status_fila, "sent");
+  }
+
+  // T3: preço subiu => descarta; depois reenvia com o preço novo
+  {
+    prepararCasoRecheca();
+    const id = criarProdutoShopee(
+      "12_12",
+      "https://shopee.com.br/product/12/12",
+      "https://s.shopee.com.br/abc12",
+    );
+    let chamadas = 0;
+    const rechecar = async () => {
+      chamadas += 1;
+      return chamadas === 1
+        ? {
+            decisao: {
+              enviar: false as const,
+              motivo: "Preço subiu desde a coleta",
+            },
+            atual: { precoAtual: 90, descontoPercentual: 40 },
+          }
+        : {
+            decisao: {
+              enviar: true as const,
+              precoAtual: 90,
+              descontoPercentual: 40,
+            },
+            atual: { precoAtual: 90, descontoPercentual: 40 },
+          };
+    };
+    const enviados: string[] = [];
+    const capturar = async (produto: { preco_atual: string }) => {
+      enviados.push(produto.preco_atual);
+    };
+
+    await enviarLote(1, capturar, rechecar);
+    assert.deepEqual(enviados, []);
+    const apos1 = buscarProdutoPorId(id);
+    assert.equal(apos1?.status_fila, "failed");
+    assert.match(apos1?.ultimo_erro_envio ?? "", /Preço subiu/);
+    assert.equal(apos1?.preco_atual, "90,00");
+    assert.equal(apos1?.desconto_percentual, 40);
+    assert.equal(apos1?.tentativas_envio, 1);
+    assert.equal(listarTentativasEnvio(id)[0]?.status, "failed");
+
+    await enviarLote(1, capturar, rechecar);
+    assert.deepEqual(enviados, ["90,00"]);
+    assert.equal(buscarProdutoPorId(id)?.status_fila, "sent");
+  }
+
+  // T4: desconto caiu abaixo do mínimo
+  {
+    prepararCasoRecheca();
+    const id = criarProdutoShopee(
+      "13_13",
+      "https://shopee.com.br/product/13/13",
+      "https://s.shopee.com.br/abc13",
+    );
+    let enviosT4 = 0;
+    await enviarLote(
+      1,
+      async () => {
+        enviosT4 += 1;
+      },
+      async () => ({
+        decisao: {
+          enviar: false as const,
+          motivo: "Desconto atual abaixo do mínimo",
+        },
+        atual: { precoAtual: 80, descontoPercentual: 10 },
+      }),
+    );
+    assert.equal(enviosT4, 0);
+    const p = buscarProdutoPorId(id);
+    assert.equal(p?.desconto_percentual, 10);
+    assert.equal(p?.status_fila, "failed");
+    assert.equal(reservarProdutoParaEnvio(), undefined);
+  }
+
+  // T5: oferta sumiu
+  {
+    prepararCasoRecheca();
+    const id = criarProdutoShopee(
+      "14_14",
+      "https://shopee.com.br/product/14/14",
+      "https://s.shopee.com.br/abc14",
+    );
+    let enviosT5 = 0;
+    await enviarLote(
+      1,
+      async () => {
+        enviosT5 += 1;
+      },
+      async () => ({
+        decisao: {
+          enviar: false as const,
+          motivo: "Oferta não encontrada na Shopee",
+        },
+        atual: null,
+      }),
+    );
+    assert.equal(enviosT5, 0);
+    const p = buscarProdutoPorId(id);
+    assert.equal(p?.tentativas_envio, 3);
+    assert.equal(p?.status_fila, "failed");
+    assert.equal(reservarProdutoParaEnvio(), undefined);
+  }
+
+  // T6: API fora do ar => devolve à fila sem consumir tentativa e encerra o lote
+  {
+    prepararCasoRecheca();
+    criarProdutoShopee(
+      "15_15",
+      "https://shopee.com.br/product/15/15",
+      "https://s.shopee.com.br/abc15",
+    );
+    criarProdutoShopee(
+      "16_16",
+      "https://shopee.com.br/product/16/16",
+      "https://s.shopee.com.br/abc16",
+    );
+    let chamadasT6 = 0;
+    let enviosT6 = 0;
+    await enviarLote(
+      2,
+      async () => {
+        enviosT6 += 1;
+      },
+      async () => {
+        chamadasT6 += 1;
+        throw new Error("rede caiu");
+      },
+    );
+    assert.equal(chamadasT6, 1);
+    assert.equal(enviosT6, 0);
+    const alterados = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM produtos WHERE status_fila != 'pending' OR tentativas_envio != 0",
+      )
+      .get() as { n: number };
+    assert.equal(alterados.n, 0);
+    const canceladas = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM tentativas_de_envio WHERE status = 'cancelled'",
+      )
+      .get() as { n: number };
+    assert.equal(canceladas.n, 1);
+  }
+
+  // T7: descarte não interrompe o lote e o Mercado Livre não passa pela recheca
+  {
+    prepararCasoRecheca();
+    const idMl = criarProdutoComLinks(
+      "MLB-T7",
+      "https://example.test/original-t7",
+      "https://example.test/afiliado-t7",
+    );
+    const idShopee = criarProdutoShopee(
+      "17_17",
+      "https://shopee.com.br/product/17/17",
+      "https://s.shopee.com.br/abc17",
+    );
+    let chamadasT7 = 0;
+    const linksEnviados: string[] = [];
+    await enviarLote(
+      2,
+      async (produto) => {
+        linksEnviados.push(produto.link_afiliado);
+      },
+      async () => {
+        chamadasT7 += 1;
+        return {
+          decisao: {
+            enviar: false as const,
+            motivo: "Oferta não encontrada na Shopee",
+          },
+          atual: null,
+        };
+      },
+    );
+    assert.equal(chamadasT7, 1);
+    assert.deepEqual(linksEnviados, ["https://example.test/afiliado-t7"]);
+    const shopeeT7 = buscarProdutoPorId(idShopee);
+    assert.equal(shopeeT7?.tentativas_envio, 3);
+    assert.equal(shopeeT7?.status_fila, "failed");
+    assert.equal(buscarProdutoPorId(idMl)?.status_fila, "sent");
+  }
 
   console.log("Resultado: envios confiáveis passou");
 } finally {

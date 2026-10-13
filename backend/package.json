@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "pretest": "tsc",
-    "test": "node dist/tests/testar_ml_cookies.js && node dist/tests/testar_fila_ofertas.js && node dist/tests/testar_envios_confiaveis.js",
+    "test": "node dist/tests/testar_ml_cookies.js && node dist/tests/testar_fila_ofertas.js && node dist/tests/testar_envios_confiaveis.js && node dist/tests/testar_shopee_conversao.js",
     "build": "tsc",
     "start": "node dist/src/index.js",
     "test:whatsapp": "npm run build && node dist/tests/testar_whatsapp_conexao.js",
