@@ -119,3 +119,77 @@ export async function coletarOfertasShopee(): Promise<number> {
     throw erro;
   }
 }
+
+export interface OfertaAtualShopee {
+  precoAtual: number;
+  descontoPercentual: number;
+}
+
+export type DecisaoRecheca =
+  | { enviar: true; precoAtual: number; descontoPercentual: number }
+  | { enviar: false; motivo: string };
+
+const TOLERANCIA_ALTA_PRECO = 1.02;
+
+// "222_111" -> "111". Devolve null se o formato não for shopId_itemId.
+export function extrairItemIdShopee(externalProductId: string): string | null {
+  const partes = externalProductId.split("_");
+  if (partes.length !== 2) return null;
+  const itemId = partes[1] ?? "";
+  return /^\d+$/.test(itemId) ? itemId : null;
+}
+
+// Função pura (sem rede/banco). precoGuardado vem do banco, formato "199,90".
+export function decidirRecheca(
+  precoGuardado: string,
+  atual: OfertaAtualShopee | null,
+  descontoMinimo: number,
+): DecisaoRecheca {
+  if (!atual) return { enviar: false, motivo: "Oferta não encontrada na Shopee" };
+  const guardado = Number(precoGuardado.replace(",", "."));
+  if (!Number.isFinite(guardado) || guardado <= 0) {
+    return { enviar: false, motivo: "Preço guardado inválido" };
+  }
+  if (atual.descontoPercentual < descontoMinimo) {
+    return { enviar: false, motivo: "Desconto atual abaixo do mínimo" };
+  }
+  if (atual.precoAtual > guardado * TOLERANCIA_ALTA_PRECO) {
+    return { enviar: false, motivo: "Preço subiu desde a coleta" };
+  }
+  return {
+    enviar: true,
+    precoAtual: atual.precoAtual,
+    descontoPercentual: atual.descontoPercentual,
+  };
+}
+
+// Consulta o preço atual de UM item. O itemId vai direto no texto da query
+// (validado como só dígitos), igual ao script tests/testar_shopee_item.ts,
+// que foi confirmado na API real.
+export async function consultarOfertaShopeePorItem(
+  itemId: string,
+): Promise<OfertaAtualShopee | null> {
+  if (!/^\d+$/.test(itemId)) throw new Error("itemId inválido");
+
+  const data = await shopeeRequest<{
+    productOfferV2: {
+      nodes: Array<{
+        itemId: number | string;
+        priceMin: string;
+        priceDiscountRate: number;
+      }>;
+    };
+  }>(
+    `query { productOfferV2(itemId: ${itemId}, page: 1, limit: 5) { nodes { itemId priceMin priceDiscountRate } } }`,
+  );
+
+  const no = data.productOfferV2.nodes.find((n) => String(n.itemId) === itemId);
+  if (!no) return null;
+  const preco = Number(no.priceMin);
+  const desconto = Number(no.priceDiscountRate);
+  if (!Number.isFinite(preco) || preco <= 0) return null;
+  return {
+    precoAtual: preco,
+    descontoPercentual: Number.isFinite(desconto) ? desconto : 0,
+  };
+}

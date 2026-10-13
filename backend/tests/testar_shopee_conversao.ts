@@ -8,9 +8,8 @@ const diretorioTeste = mkdtempSync(join(tmpdir(), "loot-shopee-"));
 process.chdir(diretorioTeste);
 
 const { default: db } = await import("../src/db/index.js");
-const { converterOfertaShopee } = await import(
-  "../src/integrations/shopee/source.js"
-);
+const { converterOfertaShopee, decidirRecheca, extrairItemIdShopee } =
+  await import("../src/integrations/shopee/source.js");
 
 try {
   const agora = 1_800_000_000;
@@ -129,6 +128,42 @@ try {
   assert.ok(caso7);
   assert.equal(caso7.preco_atual, "199,90");
   assert.equal(caso7.preco_original, "285,57");
+
+  // Recheca (descontoMinimo = 20, precoGuardado = "100,00")
+  assert.deepEqual(
+    decidirRecheca("100,00", { precoAtual: 100, descontoPercentual: 30 }, 20),
+    { enviar: true, precoAtual: 100, descontoPercentual: 30 },
+  );
+  assert.deepEqual(
+    decidirRecheca("100,00", { precoAtual: 90, descontoPercentual: 35 }, 20),
+    { enviar: true, precoAtual: 90, descontoPercentual: 35 },
+  );
+  assert.deepEqual(
+    decidirRecheca("100,00", { precoAtual: 102, descontoPercentual: 30 }, 20),
+    { enviar: true, precoAtual: 102, descontoPercentual: 30 },
+  );
+  assert.deepEqual(
+    decidirRecheca("100,00", { precoAtual: 102.01, descontoPercentual: 30 }, 20),
+    { enviar: false, motivo: "Preço subiu desde a coleta" },
+  );
+  assert.deepEqual(
+    decidirRecheca("100,00", { precoAtual: 100, descontoPercentual: 19 }, 20),
+    { enviar: false, motivo: "Desconto atual abaixo do mínimo" },
+  );
+  assert.deepEqual(decidirRecheca("100,00", null, 20), {
+    enviar: false,
+    motivo: "Oferta não encontrada na Shopee",
+  });
+  assert.deepEqual(
+    decidirRecheca("abc", { precoAtual: 100, descontoPercentual: 30 }, 20),
+    { enviar: false, motivo: "Preço guardado inválido" },
+  );
+
+  // extrairItemIdShopee
+  assert.equal(extrairItemIdShopee("222_111"), "111");
+  assert.equal(extrairItemIdShopee("abc"), null);
+  assert.equal(extrairItemIdShopee("1_2_3"), null);
+  assert.equal(extrairItemIdShopee("222_x"), null);
 
   console.log("Resultado: conversão Shopee passou");
 } finally {
