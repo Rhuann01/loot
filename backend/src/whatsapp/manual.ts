@@ -8,6 +8,7 @@ import {
 } from "../db/queries.js";
 import { executarEnvioProtegido } from "./dispatch.js";
 import { enviarProduto } from "./sender.js";
+import { temAffiliateProvider } from "../integrations/registry.js";
 
 export type ResultadoReenvioManual =
   | "sent"
@@ -53,12 +54,12 @@ export async function reenviarManualIdempotente(
     if (tentativaAtual.status !== "sending") return resultadoDaTentativa(tentativaAtual);
 
     if (
-      produto.source_key === "mercado_livre" &&
+      temAffiliateProvider(produto.source_key) &&
       (!produto.link_afiliado.trim() || produto.link_afiliado === produto.link_original)
     ) {
       marcarFalhaEnvio(
         produto.id,
-        "Link afiliado do Mercado Livre ausente ou igual ao link original.",
+        "Link afiliado ausente ou igual ao link original.",
         tentativa.id,
         true,
       );

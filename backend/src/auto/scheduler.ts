@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
-import { processarESalvarOfertas } from "../scraper/mercadolivre.js";
-import { getAffiliateProvider } from "../integrations/registry.js";
+import { coletores, getAffiliateProvider, temAffiliateProvider } from "../integrations/registry.js";
+import type { IntegrationKey } from "../integrations/types.js";
 import {
   getConfig,
   marcarComoEnviado,
@@ -11,7 +11,7 @@ import {
   reservarProdutoParaEnvioComTentativa,
   setConfig,
   integracaoEstaAtiva,
-  atualizarLinkAfiliado,
+  atualizarLinkAfiliadoPorFonte,
 } from "../db/queries.js";
 import { enviarProduto } from "../whatsapp/sender.js";
 import {
@@ -40,7 +40,7 @@ export async function enviarLote(
           let linkAfiliado = produto.link_afiliado;
 
           const precisaGerarLink =
-            produto.source_key === "mercado_livre" &&
+            temAffiliateProvider(produto.source_key) &&
             (!produto.link_afiliado.trim() ||
               produto.link_afiliado === produto.link_original);
 
@@ -49,10 +49,9 @@ export async function enviarLote(
               const linkOriginal = produto.link_original;
               if (!linkOriginal)
                 throw new Error("URL original do produto ausente");
-              const linkGerado =
-                await getAffiliateProvider("mercado_livre").generateLink(
-                  linkOriginal,
-                );
+              const linkGerado = await getAffiliateProvider(
+                produto.source_key as IntegrationKey,
+              ).generateLink(linkOriginal);
 
               if (!linkGerado.trim() || linkGerado === linkOriginal) {
                 throw new Error(
@@ -61,7 +60,11 @@ export async function enviarLote(
               }
 
               linkAfiliado = linkGerado;
-              atualizarLinkAfiliado(produto.external_product_id, linkAfiliado);
+              atualizarLinkAfiliadoPorFonte(
+                produto.source_key,
+                produto.external_product_id,
+                linkAfiliado,
+              );
             } catch (erro) {
               const mensagemErro = `Falha ao gerar link afiliado: ${
                 erro instanceof Error ? erro.message : String(erro)
@@ -199,24 +202,29 @@ export function recarregarScheduler() {
           const configAtual = obterConfigScheduler();
 
           // A coleta atualiza o estoque, mas não pode impedir os envios.
-          if (indice === 0 && integracaoEstaAtiva("mercado_livre")) {
-            try {
-              const salvas = await processarESalvarOfertas();
-              if (salvas === 0) {
-                console.warn(
-                  "scheduler: Apify não retornou ofertas válidas; usando pendências armazenadas",
+          // Cada loja é independente: a falha de uma não bloqueia a outra.
+          if (indice === 0) {
+            for (const { key, coletar } of coletores) {
+              if (!integracaoEstaAtiva(key)) {
+                console.log(
+                  `scheduler: coleta de ${key} ignorada porque a integração está desativada`,
+                );
+                continue;
+              }
+              try {
+                const salvas = await coletar();
+                if (salvas === 0) {
+                  console.warn(
+                    `scheduler: ${key} não retornou ofertas válidas; usando pendências armazenadas`,
+                  );
+                }
+              } catch (erro) {
+                console.error(
+                  `scheduler: falha na coleta de ${key}; usando pendências armazenadas`,
+                  erro,
                 );
               }
-            } catch (erro) {
-              console.error(
-                "scheduler: falha na coleta do Apify; usando pendências armazenadas",
-                erro,
-              );
             }
-          } else if (indice === 0) {
-            console.log(
-              "scheduler: coleta do Mercado Livre ignorada porque a integração está desativada",
-            );
           }
 
           try {

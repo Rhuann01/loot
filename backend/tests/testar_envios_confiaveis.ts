@@ -89,6 +89,30 @@ function criarProdutoComLinks(
   ).id;
 }
 
+function criarProdutoShopee(
+  codigo: string,
+  linkOriginal: string,
+  linkAfiliado: string,
+): number {
+  salvarProduto({
+    source_key: "shopee",
+    external_product_id: codigo,
+    nome: `Produto ${codigo}`,
+    preco_atual: "80,00",
+    preco_original: "100,00",
+    desconto_percentual: 50,
+    link_original: linkOriginal,
+    link_afiliado: linkAfiliado,
+  });
+  return (
+    db
+      .prepare(
+        "SELECT id FROM produtos WHERE source_key = 'shopee' AND external_product_id = ?",
+      )
+      .get(codigo) as { id: number }
+  ).id;
+}
+
 async function esperarArquivo(caminho: string) {
   for (let tentativa = 0; tentativa < 100; tentativa++) {
     if (existsSync(caminho)) return;
@@ -803,6 +827,79 @@ try {
     intervalo_entre_mensagens_ms: 750,
   });
   assert.equal(obterConfigScheduler().intervalo_entre_mensagens_ms, 750);
+
+  // Caso A: Shopee com link igual ao original e sem credencial – bloqueado
+  delete process.env.SHOPEE_APP_ID;
+  delete process.env.SHOPEE_SECRET;
+  limparBanco();
+  setConfig("auto_envio_ativo", "true");
+  criarProdutoShopee(
+    "1_1",
+    "https://shopee.com.br/product/1/1",
+    "https://shopee.com.br/product/1/1",
+  );
+  let shopeeEnviosA = 0;
+  await enviarLote(1, async () => {
+    shopeeEnviosA += 1;
+  });
+  assert.equal(shopeeEnviosA, 0, "Shopee com link igual ao original não deve ser enviada");
+  {
+    const prodShopeeA = db
+      .prepare(
+        "SELECT * FROM produtos WHERE source_key = 'shopee' AND external_product_id = '1_1'",
+      )
+      .get() as { id: number; status_fila: string; ultimo_erro_envio: string | null };
+    assert.equal(prodShopeeA.status_fila, "failed");
+    assert.equal(listarTentativasEnvio(prodShopeeA.id)[0]?.status, "failed");
+    assert.match(prodShopeeA.ultimo_erro_envio ?? "", /link afiliado/i);
+  }
+
+  // Caso B: Shopee com link de afiliado já válido é enviada com esse link
+  delete process.env.SHOPEE_APP_ID;
+  delete process.env.SHOPEE_SECRET;
+  limparBanco();
+  setConfig("auto_envio_ativo", "true");
+  criarProdutoShopee(
+    "2_2",
+    "https://shopee.com.br/product/2/2",
+    "https://shope.ee/abc123",
+  );
+  let shopeeLinkEnviadoB: string | undefined;
+  await enviarLote(1, async (produto) => {
+    shopeeLinkEnviadoB = produto.link_afiliado;
+  });
+  assert.equal(shopeeLinkEnviadoB, "https://shope.ee/abc123");
+  {
+    const prodShopeeB = db
+      .prepare(
+        "SELECT * FROM produtos WHERE source_key = 'shopee' AND external_product_id = '2_2'",
+      )
+      .get() as { status_fila: string };
+    assert.equal(prodShopeeB.status_fila, "sent");
+  }
+
+  // Caso C: reenvio manual de Shopee com link igual ao original é bloqueado
+  delete process.env.SHOPEE_APP_ID;
+  delete process.env.SHOPEE_SECRET;
+  limparBanco();
+  const shopeeIdC = criarProdutoShopee(
+    "3_3",
+    "https://shopee.com.br/product/3/3",
+    "https://shopee.com.br/product/3/3",
+  );
+  let shopeeEnviosC = 0;
+  assert.equal(
+    await reenviarManualIdempotente(
+      shopeeIdC,
+      "manual-shopee-original",
+      async () => {
+        shopeeEnviosC += 1;
+      },
+    ),
+    "failed",
+  );
+  assert.equal(shopeeEnviosC, 0);
+  assert.equal(buscarProdutoPorId(shopeeIdC)?.status_fila, "failed");
 
   console.log("Resultado: envios confiáveis passou");
 } finally {
