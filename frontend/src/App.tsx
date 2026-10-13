@@ -18,7 +18,7 @@ const screens: Record<number, React.ReactNode> = {
 
 function App() {
   const [index, setIndex] = useState(1);
-  const [login] = useState(true);
+  const [login] = useState(false);
 
   return (
     <main className=" overflow-hidden w-full bg-background h-full flex flex-col justify-center items-center">

@@ -7,3 +7,6 @@ frontend/dist/
 EOF
 backend/docs/
 .env
+AGENTS.md
+docs/
+scripts/
