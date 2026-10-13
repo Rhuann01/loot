@@ -337,6 +337,54 @@ try {
     );
   }
 
+  // Janela de validade: Shopee em horas, Mercado Livre em dias
+  limparBanco();
+  setConfig("janela_shopee_horas", "12");
+  {
+    const shopee13h = criarProdutoLoja("shopee", "SHP-13H", 50);
+    criarProdutoLoja("shopee", "SHP-11H", 40);
+    const ml2d = criarProdutoLoja("mercado_livre", "ML-2D", 30);
+    const ml4d = criarProdutoLoja("mercado_livre", "ML-4D", 60);
+    db.prepare(
+      "UPDATE produtos SET criado_em = datetime('now', '-13 hours') WHERE id = ?",
+    ).run(shopee13h);
+    db.prepare(
+      "UPDATE produtos SET criado_em = datetime('now', '-11 hours') WHERE external_product_id = 'SHP-11H'",
+    ).run();
+    db.prepare(
+      "UPDATE produtos SET criado_em = datetime('now', '-2 days') WHERE id = ?",
+    ).run(ml2d);
+    db.prepare(
+      "UPDATE produtos SET criado_em = datetime('now', '-4 days') WHERE id = ?",
+    ).run(ml4d);
+
+    assert.deepEqual(
+      queries.getMelhoresDescontos(10).map((p) => p.external_product_id),
+      ["SHP-11H", "ML-2D"],
+      "janela de 12h: Shopee de 13h fora, Shopee de 11h e ML de 2 dias dentro, ML de 4 dias fora",
+    );
+
+    setConfig("janela_shopee_horas", "14");
+    assert.deepEqual(
+      queries.getMelhoresDescontos(10).map((p) => p.external_product_id),
+      ["SHP-13H", "SHP-11H", "ML-2D"],
+      "janela de 14h deve incluir a Shopee de 13h",
+    );
+
+    setConfig("janela_shopee_horas", "12");
+    const reservados: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const p = reservarProdutoParaEnvio();
+      if (!p) break;
+      reservados.push(p.external_product_id);
+    }
+    assert.deepEqual(
+      reservados.sort(),
+      ["ML-2D", "SHP-11H"],
+      "a reserva deve respeitar as mesmas janelas",
+    );
+  }
+
   console.log("Resultado: fila de ofertas passou");
 } finally {
   db.close();

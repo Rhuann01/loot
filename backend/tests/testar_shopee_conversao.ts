@@ -179,6 +179,22 @@ try {
     { preco_atual: "5,00", preco_original: "100,00", desconto_percentual: 99 },
   );
 
+  // periodEndTime "2999" = sem fim informado: converte e não grava oferta_expira_em
+  const caso8 = converterOfertaShopee(
+    {
+      itemId: 111,
+      shopId: 222,
+      productName: "Fone",
+      imageUrl: "https://x/i.jpg",
+      priceMin: "80.00",
+      priceDiscountRate: 20,
+      periodEndTime: 32_503_651_199,
+    },
+    agora,
+  );
+  assert.ok(caso8);
+  assert.equal("oferta_expira_em" in caso8, false);
+
   console.log("Resultado: conversão Shopee passou");
 } finally {
   db.close();

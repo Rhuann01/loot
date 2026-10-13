@@ -165,7 +165,7 @@ export function listarProdutos(): Produto[] {
 }
 
 export function getMelhoresDescontos(limite: number): Produto[] {
-  const { descontoMinimo, janelaDias } = obterCriteriosDaFila();
+  const { descontoMinimo, janelaDias, janelaShopeeHoras } = obterCriteriosDaFila();
 
   return db
     .prepare(
@@ -175,13 +175,18 @@ export function getMelhoresDescontos(limite: number): Produto[] {
       AND status_fila IN ('pending', 'failed')
       AND tentativas_envio < 3
       AND desconto_percentual >= ?
-      AND datetime(criado_em) >= datetime('now', ?)
+      AND datetime(criado_em) >= datetime('now', CASE WHEN source_key = 'shopee' THEN ? ELSE ? END)
       AND (oferta_expira_em IS NULL OR oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
     ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
     LIMIT ?
   `,
     )
-    .all(descontoMinimo, `-${janelaDias} days`, limite) as Produto[];
+    .all(
+      descontoMinimo,
+      `-${janelaShopeeHoras} hours`,
+      `-${janelaDias} days`,
+      limite,
+    ) as Produto[];
 }
 
 function obterCriteriosDaFila() {
@@ -193,8 +198,12 @@ function obterCriteriosDaFila() {
     1,
     Number(getConfig("janela_fallback_dias") ?? 3) || 3,
   );
+  const janelaShopeeHoras = Math.max(
+    1,
+    Number(getConfig("janela_shopee_horas") ?? 12) || 12,
+  );
 
-  return { descontoMinimo, janelaDias };
+  return { descontoMinimo, janelaDias, janelaShopeeHoras };
 }
 
 export function getProdutosSelecionadosManualmente(): Produto[] {
@@ -279,7 +288,7 @@ export interface ReservaEnvio {
 }
 
 export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined {
-  const { descontoMinimo, janelaDias } = obterCriteriosDaFila();
+  const { descontoMinimo, janelaDias, janelaShopeeHoras } = obterCriteriosDaFila();
   const limiteDiario = Math.max(
     0,
     Number(getConfig("limite_diario") ?? 12) || 0,
@@ -300,7 +309,7 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
           AND c.status_fila IN ('pending', 'failed')
           AND c.tentativas_envio < 3
           AND c.desconto_percentual >= ?
-          AND datetime(c.criado_em) >= datetime('now', ?)
+          AND datetime(c.criado_em) >= datetime('now', CASE WHEN c.source_key = 'shopee' THEN ? ELSE ? END)
           AND (c.oferta_expira_em IS NULL OR c.oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
         ORDER BY c.selecionado DESC,
           (
@@ -328,7 +337,12 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
       RETURNING *
     `,
       )
-      .get(descontoMinimo, `-${janelaDias} days`, limiteDiario) as
+      .get(
+        descontoMinimo,
+        `-${janelaShopeeHoras} hours`,
+        `-${janelaDias} days`,
+        limiteDiario,
+      ) as
       | Produto
       | undefined;
     if (!produto) return undefined;

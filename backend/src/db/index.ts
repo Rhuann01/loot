@@ -262,6 +262,7 @@ const defaults: Record<string, string> = {
   horarios_envio: JSON.stringify(["05:00", "12:00", "15:00", "20:00"]),
   quantidade_por_execucao: "3",
   janela_fallback_dias: "3",
+  janela_shopee_horas: "12",
   intervalo_entre_mensagens_ms: "3000",
   whatsapp_ultima_mensagem_em_ms: "0",
   scraper_ultima_tentativa: "",

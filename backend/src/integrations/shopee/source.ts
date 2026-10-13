@@ -48,6 +48,9 @@ export interface ProdutoShopeeConvertido {
 
 const MAX_PAGINAS = 2;
 const LIMITE_POR_PAGINA = 50;
+// A API devolve periodEndTime em 2999 quando não informa o fim da oferta.
+// Valores acima do ano 2100 são tratados como "sem fim informado".
+const LIMITE_PERIODO_SEM_FIM = 4_102_444_800;
 
 const formatarPreco = (valor: number) => valor.toFixed(2).replace(".", ",");
 
@@ -77,7 +80,9 @@ export function converterOfertaShopee(
     link_original: url,
     // O link de afiliado NÃO é gerado aqui; é gerado depois da reserva, no envio.
     link_afiliado: url,
-    ...(o.periodEndTime ? { oferta_expira_em: o.periodEndTime } : {}),
+    ...(o.periodEndTime && o.periodEndTime <= LIMITE_PERIODO_SEM_FIM
+      ? { oferta_expira_em: o.periodEndTime }
+      : {}),
   };
 }
 
