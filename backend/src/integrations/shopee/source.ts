@@ -193,3 +193,16 @@ export async function consultarOfertaShopeePorItem(
     descontoPercentual: Number.isFinite(desconto) ? desconto : 0,
   };
 }
+
+// Preços formatados a partir da oferta atual da API. O "preco_original" é
+// estimado a partir do percentual (limitado a 95%), igual a converterOfertaShopee.
+export function precosDaOfertaAtual(atual: OfertaAtualShopee) {
+  const desconto = Math.min(atual.descontoPercentual, 95);
+  const original = atual.precoAtual / (1 - desconto / 100);
+  return {
+    preco_atual: formatarPreco(atual.precoAtual),
+    preco_original: formatarPreco(original),
+    desconto_percentual: Math.round(atual.descontoPercentual),
+  };
+}
+

@@ -8,8 +8,12 @@ const diretorioTeste = mkdtempSync(join(tmpdir(), "loot-shopee-"));
 process.chdir(diretorioTeste);
 
 const { default: db } = await import("../src/db/index.js");
-const { converterOfertaShopee, decidirRecheca, extrairItemIdShopee } =
-  await import("../src/integrations/shopee/source.js");
+const {
+  converterOfertaShopee,
+  decidirRecheca,
+  extrairItemIdShopee,
+  precosDaOfertaAtual,
+} = await import("../src/integrations/shopee/source.js");
 
 try {
   const agora = 1_800_000_000;
@@ -164,6 +168,16 @@ try {
   assert.equal(extrairItemIdShopee("abc"), null);
   assert.equal(extrairItemIdShopee("1_2_3"), null);
   assert.equal(extrairItemIdShopee("222_x"), null);
+
+  // precosDaOfertaAtual
+  assert.deepEqual(
+    precosDaOfertaAtual({ precoAtual: 64, descontoPercentual: 60 }),
+    { preco_atual: "64,00", preco_original: "160,00", desconto_percentual: 60 },
+  );
+  assert.deepEqual(
+    precosDaOfertaAtual({ precoAtual: 5, descontoPercentual: 99 }),
+    { preco_atual: "5,00", preco_original: "100,00", desconto_percentual: 99 },
+  );
 
   console.log("Resultado: conversão Shopee passou");
 } finally {

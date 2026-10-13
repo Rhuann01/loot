@@ -58,6 +58,7 @@ export async function shopeeRequest<T>(
       Authorization: `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${assinatura}`,
     },
     body,
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {

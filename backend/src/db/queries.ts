@@ -405,6 +405,59 @@ export function marcarEnvioAmbiguo(
   }
 }
 
+export function atualizarPrecoProduto(
+  produtoId: number,
+  precos: {
+    preco_atual: string;
+    preco_original: string;
+    desconto_percentual: number;
+  },
+) {
+  db.prepare(
+    `UPDATE produtos
+     SET preco_atual = ?, preco_original = ?, desconto_percentual = ?
+     WHERE id = ?`,
+  ).run(
+    precos.preco_atual,
+    precos.preco_original,
+    precos.desconto_percentual,
+    produtoId,
+  );
+}
+
+// Oferta que não existe mais: impede que o produto volte à fila automática.
+export function esgotarTentativasProduto(produtoId: number) {
+  db.prepare(
+    `UPDATE produtos SET tentativas_envio = 3 WHERE id = ? AND enviado = 0`,
+  ).run(produtoId);
+}
+
+// A recheca não pôde ser feita (rede/API): devolve o produto à fila sem
+// consumir a tentativa e registra a tentativa como cancelada.
+export function cancelarReservaSemConsumirTentativa(
+  produtoId: number,
+  tentativaId: number,
+  motivo: string,
+) {
+  const texto = motivo.slice(0, 500);
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE produtos
+       SET status_fila = 'pending',
+           tentativas_envio = MAX(tentativas_envio - 1, 0),
+           envio_iniciado_em = NULL,
+           origem_envio_em_andamento = NULL,
+           ultimo_erro_envio = ?
+       WHERE id = ? AND enviado = 0 AND status_fila = 'sending'`,
+    ).run(texto, produtoId);
+    db.prepare(
+      `UPDATE tentativas_de_envio
+       SET status = 'cancelled', motivo = ?, finalizado_em = CURRENT_TIMESTAMP
+       WHERE id = ? AND produto_id = ? AND status = 'sending'`,
+    ).run(texto, tentativaId, produtoId);
+  })();
+}
+
 export function liberarReservaEnvio(produtoId: number) {
   db.prepare(
     `
