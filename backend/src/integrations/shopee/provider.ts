@@ -2,7 +2,7 @@ import { shopeeRequest } from "./client.js";
 import { atualizarStatusIntegracao } from "../../db/queries.js";
 
 const MUTATION = `
-  mutation Gerar($url: String!, $subs: [String]) {
+  mutation Gerar($url: String!, $subs: [String!]) {
     generateShortLink(input: { originUrl: $url, subIds: $subs }) {
       shortLink
     }

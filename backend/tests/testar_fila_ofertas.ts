@@ -273,6 +273,70 @@ try {
   assert.equal(linhaMercadoLivre?.link_afiliado, "https://example.test/ml");
   assert.equal(contagem123.total, 2);
 
+  function criarProdutoLoja(fonte: "mercado_livre" | "shopee", id: string, desconto: number, selecionado = false): number {
+    salvarProduto({ source_key: fonte, external_product_id: id, nome: `Produto ${id}`, preco_atual: "80", preco_original: "100", desconto_percentual: desconto, link_afiliado: `https://example.test/${id}` });
+    const linha = db.prepare("SELECT id FROM produtos WHERE source_key = ? AND external_product_id = ?").get(fonte, id) as { id: number };
+    if (selecionado) db.prepare("UPDATE produtos SET selecionado = 1 WHERE id = ?").run(linha.id);
+    return linha.id;
+  }
+
+  // Caso A: alternância entre lojas
+  limparBanco();
+  criarProdutoLoja("mercado_livre", "ML-30", 30);
+  criarProdutoLoja("mercado_livre", "ML-25", 25);
+  criarProdutoLoja("shopee", "SHP-60", 60);
+  criarProdutoLoja("shopee", "SHP-50", 50);
+  {
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const p = reservarProdutoParaEnvio();
+      ids.push(p!.external_product_id);
+    }
+    assert.deepEqual(
+      ids,
+      ["SHP-60", "ML-30", "SHP-50", "ML-25"],
+      "Caso A: alternância deve seguir a ordem SHP-60, ML-30, SHP-50, ML-25",
+    );
+  }
+
+  // Caso B: uma loja faltando
+  limparBanco();
+  criarProdutoLoja("mercado_livre", "ML-A", 40);
+  criarProdutoLoja("mercado_livre", "ML-B", 35);
+  criarProdutoLoja("mercado_livre", "ML-C", 30);
+  {
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const p = reservarProdutoParaEnvio();
+      ids.push(p!.external_product_id);
+    }
+    assert.deepEqual(
+      ids,
+      ["ML-A", "ML-B", "ML-C"],
+      "Caso B: loja única deve completar todas as vagas em ordem de desconto",
+    );
+  }
+
+  // Caso C: selecionado tem prioridade
+  limparBanco();
+  criarProdutoLoja("shopee", "SHP-1", 60);
+  criarProdutoLoja("mercado_livre", "ML-1", 30, true);
+  criarProdutoLoja("shopee", "SHP-2", 50);
+  {
+    const primeiro = reservarProdutoParaEnvio();
+    assert.equal(
+      primeiro?.external_product_id,
+      "ML-1",
+      "Caso C: produto selecionado deve ter prioridade máxima",
+    );
+    const segundo = reservarProdutoParaEnvio();
+    assert.equal(
+      segundo?.external_product_id,
+      "SHP-1",
+      "Caso C: após selecionado, loja com 0 envios hoje (SHP) e maior desconto deve vir a seguir",
+    );
+  }
+
   console.log("Resultado: fila de ofertas passou");
 } finally {
   db.close();

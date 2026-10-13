@@ -295,14 +295,27 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
           envio_iniciado_em = CURRENT_TIMESTAMP,
           ultimo_erro_envio = NULL
       WHERE id = (
-        SELECT id FROM produtos
-        WHERE enviado = 0
-          AND status_fila IN ('pending', 'failed')
-          AND tentativas_envio < 3
-          AND desconto_percentual >= ?
-          AND datetime(criado_em) >= datetime('now', ?)
-          AND (oferta_expira_em IS NULL OR oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
-        ORDER BY selecionado DESC, desconto_percentual DESC, datetime(criado_em) DESC, id DESC
+        SELECT c.id FROM produtos AS c
+        WHERE c.enviado = 0
+          AND c.status_fila IN ('pending', 'failed')
+          AND c.tentativas_envio < 3
+          AND c.desconto_percentual >= ?
+          AND datetime(c.criado_em) >= datetime('now', ?)
+          AND (c.oferta_expira_em IS NULL OR c.oferta_expira_em > CAST(strftime('%s','now') AS INTEGER))
+        ORDER BY c.selecionado DESC,
+          (
+            (SELECT COUNT(*) FROM envios e
+               JOIN produtos pe ON pe.id = e.produto_id
+              WHERE date(e.enviado_em) = date('now')
+                AND pe.source_key = c.source_key)
+            +
+            (SELECT COUNT(*) FROM produtos ps
+              WHERE ps.enviado = 0
+                AND ps.status_fila = 'sending'
+                AND date(ps.envio_iniciado_em) = date('now')
+                AND ps.source_key = c.source_key)
+          ) ASC,
+          c.desconto_percentual DESC, datetime(c.criado_em) DESC, c.id DESC
         LIMIT 1
       )
       AND (
