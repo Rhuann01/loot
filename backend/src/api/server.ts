@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import routes from "./routes.js";
 
-const app = express();
+export const app = express();
 
 const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
   .split(",")
@@ -26,7 +26,7 @@ app.use("/api", routes);
 export function iniciarServidor() {
   const porta = process.env.PORT ?? 3000;
 
-  app.listen(porta, () => {
+  return app.listen(porta, () => {
     console.log(`servidor rodando na porta ${porta}`);
   });
 }
