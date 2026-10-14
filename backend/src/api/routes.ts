@@ -25,6 +25,7 @@ import {
   buscarProdutoPorExternalId,
   listarEnviosPaginado,
   enviosHoje,
+  obterDadosDashboard,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
@@ -144,6 +145,21 @@ router.use(exigirAutenticacao);
 
 router.get("/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+router.get("/dashboard", (req, res) => {
+  const period = req.query.period;
+  if (period !== undefined && period !== "7d") {
+    return enviarErro(
+      res,
+      400,
+      "PARAMETRO_INVALIDO",
+      "Período inválido. Período suportado: 7d",
+    );
+  }
+
+  const dados = obterDadosDashboard("7d");
+  res.json(dados);
 });
 
 router.get("/produtos", (req, res) => {

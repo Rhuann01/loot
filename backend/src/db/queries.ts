@@ -1,6 +1,10 @@
 import db from "./index.js";
 import { randomUUID } from "node:crypto";
-import { SQL_HOJE_BRASILIA, sqlDiaBrasilia } from "../lib/time.js";
+import {
+  SQL_HOJE_BRASILIA,
+  sqlDiaBrasilia,
+  calcularProximoEnvio,
+} from "../lib/time.js";
 
 export interface Produto {
   id: number;
@@ -1353,6 +1357,299 @@ export function listarEnviosPaginado(filtro: FiltroEnvios = {}): {
     .all(...params, limit, offset) as TentativaEnvio[];
 
   return { items, total };
+}
+
+export interface DashboardAutomation {
+  ativo: boolean;
+  proximoEnvio: string | null;
+  horarios: string[];
+  limiteDiario: number;
+  enviadosHoje: number;
+  disponiveisNaFila: number;
+}
+
+export interface DashboardToday {
+  coletadas: number;
+  enviadas: number;
+  comissaoEstimada: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: boolean;
+  };
+}
+
+export interface DashboardCommissionEntry {
+  data: string;
+  date?: string;
+  valor: number | null;
+  disponivel: boolean;
+  estimada: boolean;
+}
+
+export interface DashboardPlatformPerformance {
+  plataforma: string;
+  nome?: string;
+  available?: boolean;
+  motivo?: string;
+  coletadas: number;
+  enviadas: number;
+  falhas: number;
+  ambiguous: number;
+  comissaoEstimada: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: boolean;
+  };
+}
+
+export interface DashboardData {
+  period: "7d";
+  automation: DashboardAutomation;
+  today: DashboardToday;
+  commissionHistory: DashboardCommissionEntry[];
+  platformPerformance: DashboardPlatformPerformance[];
+  recentActivities: Array<{
+    id: number;
+    tipo: string;
+    integracaoKey: string | null;
+    plataforma: string | null;
+    produtoId: number | null;
+    tentativaId: number | null;
+    titulo: string;
+    detalhe: string | null;
+    criadoEm: string;
+  }>;
+}
+
+function lerHorariosSchedulerQueries(): string[] {
+  try {
+    const raw = getConfig("horarios_envio");
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr)
+      ? arr.filter((h): h is string => typeof h === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function obterDadosDashboard(periodo: string = "7d"): DashboardData {
+  const horarios = lerHorariosSchedulerQueries();
+  const ativo = getConfig("auto_envio_ativo") === "true";
+  const limiteDiario = Number(getConfig("limite_diario") ?? 12);
+
+  // 1. automation.enviadosHoje
+  const enviadosHoje = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as n FROM tentativas_de_envio
+         WHERE status = 'sent' AND ${sqlDiaBrasilia("COALESCE(finalizado_em, iniciado_em)")} = ${SQL_HOJE_BRASILIA}`,
+      )
+      .get() as { n: number }
+  ).n;
+
+  // 2. automation.disponiveisNaFila
+  const disponiveisNaFila = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as n FROM produtos
+         WHERE enviado = 0 AND status_fila IN ('pending', 'failed') AND tentativas_envio < 3`,
+      )
+      .get() as { n: number }
+  ).n;
+
+  // 3. today.coletadas
+  const coletadasHoje = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as n FROM produtos
+         WHERE ${sqlDiaBrasilia("criado_em")} = ${SQL_HOJE_BRASILIA}`,
+      )
+      .get() as { n: number }
+  ).n;
+
+  // 4. today.comissaoEstimada
+  const comissaoHoje = consultarComissaoDoDia("shopee");
+
+  // 5. commissionHistory (7 dias ordenados do mais antigo ao mais recente)
+  const rowsHistory = db
+    .prepare(
+      `WITH RECURSIVE dias(d, step) AS (
+         SELECT date('now', '-3 hours', '-6 days'), 0
+         UNION ALL
+         SELECT date('now', '-3 hours', printf('+%d days', -6 + step + 1)), step + 1
+         FROM dias WHERE step < 6
+       )
+       SELECT dias.d as data,
+              s.total_valor,
+              s.qtd
+       FROM dias
+       LEFT JOIN (
+         SELECT ${sqlDiaBrasilia("coletado_em")} as dia,
+                SUM(comissao_valor) as total_valor,
+                COUNT(*) as qtd
+         FROM comissao_snapshots
+         WHERE integracao_key = 'shopee'
+           AND comissao_valor IS NOT NULL
+         GROUP BY dia
+       ) s ON s.dia = dias.d
+       ORDER BY dias.d ASC`,
+    )
+    .all() as Array<{ data: string; total_valor: number | null; qtd: number | null }>;
+
+  const commissionHistory: DashboardCommissionEntry[] = rowsHistory.map((r) => {
+    const temDado = r.qtd !== null && r.qtd > 0 && r.total_valor !== null;
+    return {
+      data: r.data,
+      date: r.data,
+      valor: temDado ? Number(r.total_valor!.toFixed(2)) : null,
+      disponivel: temDado,
+      estimada: true,
+    };
+  });
+
+  // 6. platformPerformance
+  // Shopee
+  const shopeeColetadas = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as n FROM produtos
+         WHERE source_key = 'shopee'
+           AND ${sqlDiaBrasilia("criado_em")} >= date('now', '-3 hours', '-6 days')`,
+      )
+      .get() as { n: number }
+  ).n;
+
+  const shopeeTentativas = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) as enviadas,
+         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as falhas,
+         COALESCE(SUM(CASE WHEN status = 'ambiguous' THEN 1 ELSE 0 END), 0) as ambiguous
+       FROM tentativas_de_envio
+       WHERE plataforma = 'shopee'
+         AND ${sqlDiaBrasilia("COALESCE(finalizado_em, iniciado_em)")} >= date('now', '-3 hours', '-6 days')`,
+    )
+    .get() as { enviadas: number; falhas: number; ambiguous: number };
+
+  const shopeeComissao7d = db
+    .prepare(
+      `SELECT SUM(comissao_valor) as total, COUNT(*) as qtd
+       FROM comissao_snapshots
+       WHERE integracao_key = 'shopee'
+         AND comissao_valor IS NOT NULL
+         AND ${sqlDiaBrasilia("coletado_em")} >= date('now', '-3 hours', '-6 days')`,
+    )
+    .get() as { total: number | null; qtd: number } | undefined;
+
+  const temComissaoShopee7d =
+    shopeeComissao7d !== undefined &&
+    shopeeComissao7d.qtd > 0 &&
+    shopeeComissao7d.total !== null;
+
+  // Mercado Livre
+  const mlColetadas = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as n FROM produtos
+         WHERE source_key = 'mercado_livre'
+           AND ${sqlDiaBrasilia("criado_em")} >= date('now', '-3 hours', '-6 days')`,
+      )
+      .get() as { n: number }
+  ).n;
+
+  const mlTentativas = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) as enviadas,
+         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as falhas,
+         COALESCE(SUM(CASE WHEN status = 'ambiguous' THEN 1 ELSE 0 END), 0) as ambiguous
+       FROM tentativas_de_envio
+       WHERE (plataforma = 'mercado_livre' OR (plataforma IS NULL AND produto_id IN (SELECT id FROM produtos WHERE source_key = 'mercado_livre')))
+         AND ${sqlDiaBrasilia("COALESCE(finalizado_em, iniciado_em)")} >= date('now', '-3 hours', '-6 days')`,
+    )
+    .get() as { enviadas: number; falhas: number; ambiguous: number };
+
+  const platformPerformance: DashboardPlatformPerformance[] = [
+    {
+      plataforma: "shopee",
+      nome: "Shopee",
+      available: true,
+      coletadas: shopeeColetadas,
+      enviadas: shopeeTentativas.enviadas,
+      falhas: shopeeTentativas.falhas,
+      ambiguous: shopeeTentativas.ambiguous,
+      comissaoEstimada: {
+        valor: temComissaoShopee7d ? Number(shopeeComissao7d!.total!.toFixed(2)) : null,
+        disponivel: temComissaoShopee7d,
+        estimada: true,
+      },
+    },
+    {
+      plataforma: "mercado_livre",
+      nome: "Mercado Livre",
+      available: true,
+      coletadas: mlColetadas,
+      enviadas: mlTentativas.enviadas,
+      falhas: mlTentativas.falhas,
+      ambiguous: mlTentativas.ambiguous,
+      comissaoEstimada: {
+        valor: null,
+        disponivel: false,
+        estimada: true,
+      },
+    },
+    {
+      plataforma: "tiktok_shop",
+      nome: "TikTok Shop",
+      available: false,
+      motivo: "Não disponível nesta versão",
+      coletadas: 0,
+      enviadas: 0,
+      falhas: 0,
+      ambiguous: 0,
+      comissaoEstimada: {
+        valor: null,
+        disponivel: false,
+        estimada: true,
+      },
+    },
+  ];
+
+  // 7. recentActivities
+  const { items: atividades } = listarAtividades({ limit: 10 });
+  const recentActivities = atividades.map((a) => ({
+    id: a.id,
+    tipo: a.tipo,
+    integracaoKey: a.integracao_key,
+    plataforma: a.integracao_key,
+    produtoId: a.produto_id,
+    tentativaId: a.tentativa_id,
+    titulo: a.titulo,
+    detalhe: a.detalhe,
+    criadoEm: a.criado_em,
+  }));
+
+  return {
+    period: "7d",
+    automation: {
+      ativo,
+      proximoEnvio: calcularProximoEnvio(horarios, ativo),
+      horarios,
+      limiteDiario,
+      enviadosHoje,
+      disponiveisNaFila,
+    },
+    today: {
+      coletadas: coletadasHoje,
+      enviadas: enviadosHoje,
+      comissaoEstimada: comissaoHoje,
+    },
+    commissionHistory,
+    platformPerformance,
+    recentActivities,
+  };
 }
 
 
