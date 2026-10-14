@@ -158,6 +158,10 @@ export async function coletarOfertasShopee(): Promise<number> {
 export interface OfertaAtualShopee {
   precoAtual: number;
   descontoPercentual: number;
+  nome?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  commission?: string | number | null | undefined;
+  commissionRate?: string | number | null | undefined;
 }
 
 export type DecisaoRecheca =
@@ -210,12 +214,14 @@ export async function consultarOfertaShopeePorItem(
     productOfferV2: {
       nodes: Array<{
         itemId: number | string;
+        productName?: string;
+        imageUrl?: string;
         priceMin: string;
         priceDiscountRate: number;
       }>;
     };
   }>(
-    `query { productOfferV2(itemId: ${itemId}, page: 1, limit: 5) { nodes { itemId priceMin priceDiscountRate } } }`,
+    `query { productOfferV2(itemId: ${itemId}, page: 1, limit: 5) { nodes { itemId productName imageUrl priceMin priceDiscountRate } } }`,
   );
 
   const no = data.productOfferV2.nodes.find((n) => String(n.itemId) === itemId);
@@ -226,6 +232,8 @@ export async function consultarOfertaShopeePorItem(
   return {
     precoAtual: preco,
     descontoPercentual: Number.isFinite(desconto) ? desconto : 0,
+    nome: no.productName ?? null,
+    imageUrl: no.imageUrl ?? null,
   };
 }
 

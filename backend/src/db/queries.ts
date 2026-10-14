@@ -30,7 +30,7 @@ export type OrigemEnvio = "manual" | "auto" | "retry";
 
 export interface TentativaEnvio {
   id: number;
-  produto_id: number;
+  produto_id: number | null;
   origem: OrigemEnvio;
   status: "sending" | "sent" | "failed" | "ambiguous" | "cancelled";
   motivo: string | null;
@@ -46,19 +46,19 @@ export interface TentativaEnvio {
   erro_mensagem: string | null;
 }
 export interface NovoProduto {
-  source_key?: string;
+  source_key?: string | undefined;
   external_product_id: string;
   nome: string;
   preco_atual: string;
-  preco_original?: string | null;
-  desconto_percentual?: number;
-  imagem_url?: string;
-  link_original?: string;
+  preco_original?: string | null | undefined;
+  desconto_percentual?: number | undefined;
+  imagem_url?: string | null | undefined;
+  link_original?: string | null | undefined;
   link_afiliado: string;
-  categoria_id?: string;
-  oferta_expira_em?: number;
-  comissao_valor?: number | null;
-  comissao_percentual?: number | null;
+  categoria_id?: string | null | undefined;
+  oferta_expira_em?: number | null | undefined;
+  comissao_valor?: number | null | undefined;
+  comissao_percentual?: number | null | undefined;
 }
 
 export function salvarProduto(produto: NovoProduto) {
@@ -1308,4 +1308,51 @@ export function listarAtividades(filtro: FiltroAtividades = {}): {
 
   return { items, total };
 }
+
+export interface FiltroEnvios {
+  page?: number | undefined;
+  limit?: number | undefined;
+  status?: string | undefined;
+  plataforma?: string | undefined;
+}
+
+export function listarEnviosPaginado(filtro: FiltroEnvios = {}): {
+  items: TentativaEnvio[];
+  total: number;
+} {
+  const page = Math.max(1, filtro.page ?? 1);
+  const limit = Math.max(1, Math.min(100, filtro.limit ?? 20));
+  const offset = (page - 1) * limit;
+
+  const condicoes: string[] = [];
+  const params: unknown[] = [];
+
+  if (filtro.status && filtro.status !== "all") {
+    condicoes.push("status = ?");
+    params.push(filtro.status);
+  }
+
+  if (filtro.plataforma) {
+    condicoes.push("plataforma = ?");
+    params.push(filtro.plataforma);
+  }
+
+  const whereClause =
+    condicoes.length > 0 ? `WHERE ${condicoes.join(" AND ")}` : "";
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM tentativas_de_envio ${whereClause}`)
+      .get(...params) as { n: number }
+  ).n;
+
+  const items = db
+    .prepare(
+      `SELECT * FROM tentativas_de_envio ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as TentativaEnvio[];
+
+  return { items, total };
+}
+
 

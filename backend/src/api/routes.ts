@@ -21,11 +21,22 @@ import {
   liberarLockExecucao,
   sanitizarTextoAtividade,
   ABAS_PRODUTOS,
+  buscarTentativaEnvioPorId,
+  buscarProdutoPorExternalId,
+  listarEnviosPaginado,
+  enviosHoje,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
   type Produto,
 } from "../db/queries.js";
+import {
+  normalizarUrlShopee,
+  resolverLinkShopee,
+  gerarPreviewManualShopee,
+  executarEnvioManualShopee,
+  ShopeeUrlError,
+} from "../whatsapp/envio-manual-shopee.js";
 import { sincronizarPlataforma } from "../integrations/registry.js";
 import {
   getQrCode,
@@ -790,6 +801,241 @@ router.post("/produtos/:id/reenviar", async (req, res) => {
   } catch {
     enviarErro(res, 502, "ERRO_INTERNO", "não foi possível confirmar o envio manual");
   }
+});
+
+// ---------- Envios e Envio Manual Shopee ----------
+
+function calcularProximoEnvio(horarios: string[], ativo: boolean): string | null {
+  if (!ativo || horarios.length === 0) return null;
+  const agora = new Date();
+  const brasiliaStr = agora.toLocaleTimeString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const ordenados = [...horarios].sort();
+  const futuro = ordenados.find((h) => h > brasiliaStr);
+  return futuro ?? ordenados[0] ?? null;
+}
+
+router.post("/sends/manual/resolve", async (req, res) => {
+  const url = req.body?.url;
+  try {
+    const dados = await resolverLinkShopee(url);
+    res.json(dados);
+  } catch (err) {
+    if (err instanceof ShopeeUrlError) {
+      return enviarErro(res, err.status, err.code, err.message, err.extra);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    enviarErro(res, 500, "ERRO_INTERNO", msg);
+  }
+});
+
+router.post("/sends/manual/preview", async (req, res) => {
+  try {
+    const dados = await gerarPreviewManualShopee(req.body);
+    res.json(dados);
+  } catch (err) {
+    if (err instanceof ShopeeUrlError) {
+      return enviarErro(res, err.status, err.code, err.message, err.extra);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    enviarErro(res, 500, "ERRO_INTERNO", msg);
+  }
+});
+
+router.post("/sends/manual", async (req, res) => {
+  const chave = (
+    req.header("Idempotency-Key") ??
+    req.body?.idempotencyKey ??
+    ""
+  ).trim() || undefined;
+
+  try {
+    const resultado = await executarEnvioManualShopee(req.body, chave);
+    if (!resultado.sucesso) {
+      return res.status(502).json({
+        ...resultado,
+        error: {
+          code: resultado.status === "failed" ? "ENVIO_FALHOU" : "ENVIO_AMBIGUO",
+          message: resultado.motivo || "falha no envio",
+          needsReview: resultado.needsReview,
+          status: resultado.status,
+        },
+      });
+    }
+    return res.json(resultado);
+  } catch (err) {
+    if (err instanceof ShopeeUrlError) {
+      return enviarErro(res, err.status, err.code, err.message, err.extra);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    enviarErro(res, 500, "ERRO_INTERNO", msg);
+  }
+});
+
+router.get("/sends", (req, res) => {
+  const page = req.query.page !== undefined ? Number(req.query.page) : 1;
+  const limit = req.query.limit !== undefined ? Number(req.query.limit) : 20;
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const plataforma = typeof req.query.plataforma === "string" ? req.query.plataforma : undefined;
+
+  const resultado = listarEnviosPaginado({ page, limit, status, plataforma });
+  res.json({
+    items: resultado.items.map(tentativaParaResposta),
+    page: Math.max(1, page),
+    limit: Math.max(1, Math.min(100, limit)),
+    total: resultado.total,
+  });
+});
+
+router.get("/sends/summary", (req, res) => {
+  const config = obterConfigScheduler();
+  const destinoId = getConfig("whatsapp_grupo_id") || null;
+  const destinoNome = getConfig("whatsapp_grupo_nome") || null;
+
+  res.json({
+    ativo: config.ativo,
+    proximoEnvio: calcularProximoEnvio(config.horarios, config.ativo),
+    limiteDiario: config.limite_diario,
+    enviadosHoje: enviosHoje(),
+    intervaloMs: config.intervalo_entre_mensagens_ms,
+    plataformasPermitidas: ["shopee", "mercado_livre"],
+    destino: {
+      id: destinoId,
+      nome: destinoNome,
+    },
+    formatoMensagem: "padrao",
+  });
+});
+
+router.get("/sends/:attemptId/message", (req, res) => {
+  const attemptId = Number(req.params.attemptId);
+  if (!Number.isInteger(attemptId) || attemptId <= 0) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "attemptId inválido");
+  }
+
+  const tentativa = buscarTentativaEnvioPorId(attemptId);
+  if (!tentativa) {
+    return enviarErro(res, 404, "NAO_ENCONTRADO", "tentativa de envio não encontrada");
+  }
+
+  if (tentativa.mensagem_snapshot) {
+    return res.json({
+      disponivel: true,
+      texto: tentativa.mensagem_snapshot,
+    });
+  }
+
+  return res.json({
+    disponivel: false,
+    texto: null,
+  });
+});
+
+router.post("/sends/:attemptId/retry", async (req, res) => {
+  const attemptId = Number(req.params.attemptId);
+  if (!Number.isInteger(attemptId) || attemptId <= 0) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "attemptId inválido");
+  }
+
+  const tentativa = buscarTentativaEnvioPorId(attemptId);
+  if (!tentativa) {
+    return enviarErro(res, 404, "NAO_ENCONTRADO", "tentativa de envio não encontrada");
+  }
+
+  if (tentativa.status === "sent") {
+    return enviarErro(
+      res,
+      400,
+      "ENVIO_JA_REALIZADO",
+      "Esta tentativa já foi enviada com sucesso",
+    );
+  }
+
+  const chave = (
+    req.header("Idempotency-Key") ??
+    req.body?.idempotencyKey ??
+    `retry_${attemptId}`
+  ).trim();
+
+  let produtoIdParaRetry = tentativa.produto_id;
+  if (!produtoIdParaRetry && tentativa.url_original) {
+    const info = await normalizarUrlShopee(tentativa.url_original).catch(() => null);
+    if (info) {
+      const prodSalvo = buscarProdutoPorExternalId("shopee", info.externalProductId);
+      if (prodSalvo) produtoIdParaRetry = prodSalvo.id;
+    }
+  }
+
+  if (produtoIdParaRetry) {
+    try {
+      const resultado = await reenviarManualIdempotente(produtoIdParaRetry, chave);
+      const status = statusHttpReenvioManual(resultado);
+      if (resultado === "sent") return res.status(status).json({ sucesso: true, status: "sent" });
+      if (resultado === "sending") return res.status(status).json({ status: resultado });
+      if (resultado === "conflito") {
+        return enviarErro(
+          res,
+          status,
+          "CONFLITO",
+          "Idempotency-Key já foi usada para outro produto",
+        );
+      }
+      if (resultado === "ausente") {
+        return enviarErro(res, status, "NAO_ENCONTRADO", "produto não encontrado");
+      }
+
+      const produtoAtualizado = buscarProdutoComPlataforma(produtoIdParaRetry);
+      const mensagemErro =
+        produtoAtualizado?.ultimo_erro_envio ||
+        "não foi possível confirmar o reenvio";
+
+      return enviarErro(
+        res,
+        status,
+        resultado === "failed" ? "REENVIO_FALHOU" : "REENVIO_AMBIGUO",
+        mensagemErro,
+        { status: resultado, needsReview: resultado === "ambiguous" },
+      );
+    } catch {
+      return enviarErro(res, 502, "ERRO_INTERNO", "não foi possível confirmar o reenvio");
+    }
+  }
+
+  if (tentativa.url_original && tentativa.plataforma === "shopee") {
+    try {
+      const resultado = await executarEnvioManualShopee(
+        {
+          url: tentativa.url_original,
+          nome: tentativa.titulo ?? undefined,
+          precoAtual: "1,00",
+        },
+        chave,
+      );
+      if (!resultado.sucesso) {
+        return res.status(502).json({
+          ...resultado,
+          error: {
+            code: resultado.status === "failed" ? "ENVIO_FALHOU" : "ENVIO_AMBIGUO",
+            message: resultado.motivo || "falha no envio",
+            needsReview: resultado.needsReview,
+            status: resultado.status,
+          },
+        });
+      }
+      return res.json(resultado);
+    } catch (err) {
+      if (err instanceof ShopeeUrlError) {
+        return enviarErro(res, err.status, err.code, err.message, err.extra);
+      }
+      return enviarErro(res, 502, "ERRO_INTERNO", "não foi possível confirmar o reenvio");
+    }
+  }
+
+  return enviarErro(res, 400, "RETRY_INDISPONIVEL", "não foi possível reenviar esta tentativa");
 });
 
 // ---------- Afiliado Mercado Livre ----------
