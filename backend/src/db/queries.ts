@@ -45,7 +45,7 @@ export interface TentativaEnvio {
   erro_codigo: string | null;
   erro_mensagem: string | null;
 }
-interface NovoProduto {
+export interface NovoProduto {
   source_key?: string;
   external_product_id: string;
   nome: string;
@@ -57,6 +57,8 @@ interface NovoProduto {
   link_afiliado: string;
   categoria_id?: string;
   oferta_expira_em?: number;
+  comissao_valor?: number | null;
+  comissao_percentual?: number | null;
 }
 
 export function salvarProduto(produto: NovoProduto) {
@@ -96,6 +98,25 @@ export function salvarProduto(produto: NovoProduto) {
       criado_em = CURRENT_TIMESTAMP
   `);
   inserir.run(dados);
+
+  if (
+    dados.source_key === "shopee" &&
+    (produto.comissao_valor != null || produto.comissao_percentual != null)
+  ) {
+    const salvo = db
+      .prepare(
+        "SELECT id FROM produtos WHERE source_key = ? AND external_product_id = ?",
+      )
+      .get(dados.source_key, dados.external_product_id) as { id: number } | undefined;
+    if (salvo) {
+      gravarSnapshotComissao({
+        produto_id: salvo.id,
+        integracao_key: "shopee",
+        comissao_valor: produto.comissao_valor,
+        comissao_percentual: produto.comissao_percentual,
+      });
+    }
+  }
 }
 
 export function limparProdutosAntigos(): number {
@@ -287,6 +308,16 @@ export function marcarComoEnviado(produtoId: number, tentativaId?: number) {
       ).run(tentativaId, produtoId);
     }
     db.prepare(`INSERT INTO envios (produto_id) VALUES (?)`).run(produtoId);
+
+    const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+    gravarAtividade({
+      tipo: "envio_sucesso",
+      integracao_key: prod?.source_key ?? null,
+      produto_id: produtoId || null,
+      tentativa_id: tentativaId ?? null,
+      titulo: `Envio concluído: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+      detalhe: "Mensagem enviada com sucesso",
+    });
   });
   transacao();
 }
@@ -402,6 +433,16 @@ export function marcarFalhaEnvio(
        WHERE id = ? AND produto_id = ? AND status = 'sending'`,
     ).run(erro.slice(0, 500), tentativaId, produtoId);
   }
+
+  const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+  gravarAtividade({
+    tipo: "envio_falha",
+    integracao_key: prod?.source_key ?? null,
+    produto_id: produtoId || null,
+    tentativa_id: tentativaId ?? null,
+    titulo: `Falha no envio: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+    detalhe: erro ? erro.slice(0, 200) : "Falha desconhecida",
+  });
 }
 
 export function marcarEnvioAmbiguo(
@@ -426,6 +467,16 @@ export function marcarEnvioAmbiguo(
        WHERE id = ? AND produto_id = ? AND status = 'sending'`,
     ).run(erro.slice(0, 500), tentativaId, produtoId);
   }
+
+  const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+  gravarAtividade({
+    tipo: "envio_ambiguo",
+    integracao_key: prod?.source_key ?? null,
+    produto_id: produtoId || null,
+    tentativa_id: tentativaId ?? null,
+    titulo: `Envio com status ambíguo: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+    detalhe: erro ? erro.slice(0, 200) : "Status de entrega incerto",
+  });
 }
 
 export function atualizarPrecoProduto(
@@ -895,3 +946,236 @@ export function buscarProdutoComPlataforma(id: number): ProdutoComPlataforma | u
      FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key WHERE p.id = ?`,
   ).get(id) as ProdutoComPlataforma | undefined;
 }
+
+export function buscarProdutoPorExternalId(
+  sourceKey: string,
+  externalProductId: string,
+): Produto | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM produtos WHERE source_key = ? AND external_product_id = ?`,
+    )
+    .get(sourceKey, externalProductId) as Produto | undefined;
+}
+
+export interface ComissaoSnapshot {
+  id: number;
+  produto_id: number | null;
+  integracao_key: string;
+  comissao_valor: number | null;
+  comissao_percentual: number | null;
+  estimada: number;
+  coletado_em: string;
+}
+
+export interface NovoSnapshotComissao {
+  produto_id?: number | null | undefined;
+  integracao_key: string;
+  comissao_valor?: number | null | undefined;
+  comissao_percentual?: number | null | undefined;
+  estimada?: number | undefined;
+}
+
+export function gravarSnapshotComissao(
+  dados: NovoSnapshotComissao,
+): ComissaoSnapshot | null {
+  // Mercado Livre não possui fonte confirmada de comissão
+  if (dados.integracao_key === "mercado_livre") {
+    return null;
+  }
+
+  const valor =
+    dados.comissao_valor !== undefined &&
+    dados.comissao_valor !== null &&
+    !Number.isNaN(dados.comissao_valor)
+      ? Number(dados.comissao_valor)
+      : null;
+
+  const percentual =
+    dados.comissao_percentual !== undefined &&
+    dados.comissao_percentual !== null &&
+    !Number.isNaN(dados.comissao_percentual)
+      ? Number(dados.comissao_percentual)
+      : null;
+
+  // Não gravar snapshot vazio
+  if (valor === null && percentual === null) {
+    return null;
+  }
+
+  const estimada = 1; // Sempre estimativa
+
+  const snapshot = db
+    .prepare(
+      `INSERT INTO comissao_snapshots (produto_id, integracao_key, comissao_valor, comissao_percentual, estimada)
+       VALUES (?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      dados.produto_id ?? null,
+      dados.integracao_key,
+      valor,
+      percentual,
+      estimada,
+    ) as ComissaoSnapshot;
+
+  gravarAtividade({
+    tipo: "comissao_snapshot",
+    integracao_key: dados.integracao_key,
+    produto_id: dados.produto_id ?? null,
+    titulo: "Snapshot de comissão registrado",
+    detalhe: `Valor: ${valor !== null ? valor : "n/a"}, Taxa: ${percentual !== null ? percentual : "n/a"}`,
+  });
+
+  return snapshot;
+}
+
+export function listarSnapshotsComissao(produtoId: number): ComissaoSnapshot[] {
+  return db
+    .prepare(
+      `SELECT * FROM comissao_snapshots WHERE produto_id = ? ORDER BY id DESC`,
+    )
+    .all(produtoId) as ComissaoSnapshot[];
+}
+
+export function obterUltimaComissao(produtoId: number): ComissaoSnapshot | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM comissao_snapshots WHERE produto_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(produtoId) as ComissaoSnapshot | undefined;
+  return row ?? null;
+}
+
+export interface ResumoComissaoDia {
+  valor: number | null;
+  disponivel: boolean;
+  estimada: true;
+}
+
+export function consultarComissaoDoDia(
+  integracaoKey: string = "shopee",
+): ResumoComissaoDia {
+  const row = db
+    .prepare(
+      `SELECT SUM(comissao_valor) as total_valor, COUNT(*) as qtd
+       FROM comissao_snapshots
+       WHERE integracao_key = ?
+         AND ${sqlDiaBrasilia("coletado_em")} = ${SQL_HOJE_BRASILIA}
+         AND comissao_valor IS NOT NULL`,
+    )
+    .get(integracaoKey) as { total_valor: number | null; qtd: number } | undefined;
+
+  if (!row || row.qtd === 0 || row.total_valor === null) {
+    return {
+      valor: null,
+      disponivel: false,
+      estimada: true,
+    };
+  }
+
+  return {
+    valor: Number(row.total_valor.toFixed(2)),
+    disponivel: true,
+    estimada: true,
+  };
+}
+
+export interface Atividade {
+  id: number;
+  tipo: string;
+  integracao_key: string | null;
+  produto_id: number | null;
+  tentativa_id: number | null;
+  titulo: string;
+  detalhe: string | null;
+  criado_em: string;
+}
+
+export function sanitizarTextoAtividade(
+  texto: string | null | undefined,
+): string | null {
+  if (!texto) return null;
+  let limpo = texto;
+  limpo = limpo.replace(/cookie[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/csrf[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/token[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/secret[^\s,;]*/gi, "[redigido]");
+  return limpo.slice(0, 500);
+}
+
+export function gravarAtividade(dados: {
+  tipo: string;
+  integracao_key?: string | null | undefined;
+  produto_id?: number | null | undefined;
+  tentativa_id?: number | null | undefined;
+  titulo: string;
+  detalhe?: string | null | undefined;
+}): Atividade {
+  const tituloLimpo = sanitizarTextoAtividade(dados.titulo) ?? dados.tipo;
+  const detalheLimpo = sanitizarTextoAtividade(dados.detalhe);
+
+  const row = db
+    .prepare(
+      `INSERT INTO atividades (tipo, integracao_key, produto_id, tentativa_id, titulo, detalhe)
+       VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      dados.tipo,
+      dados.integracao_key ?? null,
+      dados.produto_id ?? null,
+      dados.tentativa_id ?? null,
+      tituloLimpo,
+      detalheLimpo,
+    ) as Atividade;
+
+  return row;
+}
+
+export interface FiltroAtividades {
+  page?: number | undefined;
+  limit?: number | undefined;
+  tipo?: string | undefined;
+  integracao_key?: string | undefined;
+  plataforma?: string | undefined;
+}
+
+export function listarAtividades(filtro: FiltroAtividades = {}): {
+  items: Atividade[];
+  total: number;
+} {
+  const page = Math.max(1, filtro.page ?? 1);
+  const limit = Math.max(1, Math.min(100, filtro.limit ?? 20));
+  const offset = (page - 1) * limit;
+
+  const condicoes: string[] = [];
+  const params: unknown[] = [];
+
+  if (filtro.tipo) {
+    condicoes.push("tipo = ?");
+    params.push(filtro.tipo);
+  }
+
+  const integracao = filtro.plataforma || filtro.integracao_key;
+  if (integracao) {
+    condicoes.push("integracao_key = ?");
+    params.push(integracao);
+  }
+
+  const whereClause =
+    condicoes.length > 0 ? `WHERE ${condicoes.join(" AND ")}` : "";
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM atividades ${whereClause}`)
+      .get(...params) as { n: number }
+  ).n;
+
+  const items = db
+    .prepare(
+      `SELECT * FROM atividades ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as Atividade[];
+
+  return { items, total };
+}
+

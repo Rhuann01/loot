@@ -9,6 +9,9 @@ import {
   listarProdutosPaginado,
   buscarProdutoComPlataforma,
   listarTentativasEnvio,
+  obterUltimaComissao,
+  listarAtividades,
+  gravarAtividade,
   ABAS_PRODUTOS,
   type AbaProdutos,
   type ProdutoComPlataforma,
@@ -190,9 +193,26 @@ router.get("/produtos/:id", (req, res) => {
     return enviarErro(res, 404, "NAO_ENCONTRADO", "produto não encontrado");
   }
 
+  const ultimaComissao = obterUltimaComissao(p.id);
+  const comissao = ultimaComissao
+    ? {
+        valor: ultimaComissao.comissao_valor,
+        percentual: ultimaComissao.comissao_percentual,
+        disponivel: true,
+        estimada: true,
+        coletadaEm: ultimaComissao.coletado_em,
+      }
+    : {
+        valor: null,
+        percentual: null,
+        disponivel: false,
+        estimada: true,
+        coletadaEm: null,
+      };
+
   res.json({
     ...produtoParaResposta(p),
-    comissao: { valor: null, disponivel: false },
+    comissao,
     pedidos: { disponivel: false, motivo: "fonte de dados não confirmada" },
     tentativas: listarTentativasEnvio(id).map(tentativaParaResposta),
   });
@@ -218,6 +238,68 @@ router.get("/produtos/:id/tentativas", (req, res) => {
   res.json(
     envelopeLista(tentativas, 1, tentativas.length || 1, tentativas.length),
   );
+});
+
+router.get("/activities", (req, res) => {
+  let page = 1;
+  if (req.query.page !== undefined) {
+    const p = Number(req.query.page);
+    if (!Number.isInteger(p) || p < 1) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "page deve ser um inteiro >= 1",
+      );
+    }
+    page = p;
+  }
+
+  let limit = 20;
+  if (req.query.limit !== undefined) {
+    const l = Number(req.query.limit);
+    if (!Number.isInteger(l) || l < 1 || l > 100) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "limit deve ser um inteiro entre 1 e 100",
+      );
+    }
+    limit = l;
+  }
+
+  const tipo = typeof req.query.tipo === "string" ? req.query.tipo : undefined;
+  const plataforma =
+    typeof req.query.plataforma === "string" ? req.query.plataforma : undefined;
+
+  const { items, total } = listarAtividades({ page, limit, tipo, plataforma });
+  res.json(
+    envelopeLista(
+      items.map((a) => ({
+        id: a.id,
+        tipo: a.tipo,
+        integracaoKey: a.integracao_key,
+        plataforma: a.integracao_key,
+        produtoId: a.produto_id,
+        tentativaId: a.tentativa_id,
+        titulo: a.titulo,
+        detalhe: a.detalhe,
+        criadoEm: a.criado_em,
+      })),
+      page,
+      limit,
+      total,
+    ),
+  );
+});
+
+inscreverMudancasConexao((status) => {
+  gravarAtividade({
+    tipo: "whatsapp_status",
+    titulo: `WhatsApp: ${status.estado}`,
+    detalhe: `Conectado: ${status.conectado}`,
+  });
 });
 
 router.get("/whatsapp/status", (req, res) => {

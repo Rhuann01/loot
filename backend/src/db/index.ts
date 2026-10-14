@@ -315,6 +315,43 @@ aplicarMigracao(2, "tentativas_snapshot", () => {
   db.exec("UPDATE produtos SET preco_original = NULL WHERE source_key = 'shopee'");
 });
 
+aplicarMigracao(3, "historico_comissao_atividades", () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS comissao_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      produto_id INTEGER,
+      integracao_key TEXT NOT NULL,
+      comissao_valor REAL,
+      comissao_percentual REAL,
+      estimada INTEGER NOT NULL DEFAULT 1,
+      coletado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS atividades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tipo TEXT NOT NULL,
+      integracao_key TEXT,
+      produto_id INTEGER,
+      tentativa_id INTEGER,
+      titulo TEXT NOT NULL,
+      detalhe TEXT,
+      criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE SET NULL,
+      FOREIGN KEY (tentativa_id) REFERENCES tentativas_de_envio(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_comissao_snapshots_coletado_em
+      ON comissao_snapshots(coletado_em);
+    CREATE INDEX IF NOT EXISTS idx_comissao_snapshots_integracao
+      ON comissao_snapshots(integracao_key);
+    CREATE INDEX IF NOT EXISTS idx_atividades_criado_em
+      ON atividades(criado_em);
+    CREATE INDEX IF NOT EXISTS idx_atividades_integracao
+      ON atividades(integracao_key);
+  `);
+});
+
 console.log(
   "banco de dados pronto: tabelas criadas, configs padrão aplicadas",
 );
