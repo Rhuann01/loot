@@ -270,6 +270,7 @@ const defaults: Record<string, string> = {
   scraper_ultimo_resultado: "",
   scraper_ultimo_erro: "",
   whatsapp_grupo_id: process.env.WHATSAPP_GROUP_ID ?? "",
+  whatsapp_grupo_nome: "",
 };
 
 const inserirDefault = db.prepare(`
@@ -279,6 +280,40 @@ const inserirDefault = db.prepare(`
 for (const [chave, valor] of Object.entries(defaults)) {
   inserirDefault.run(chave, valor);
 }
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    versao INTEGER PRIMARY KEY,
+    nome TEXT NOT NULL,
+    aplicada_em TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+export function aplicarMigracao(versao: number, nome: string, aplicar: () => void): boolean {
+  const ja = db.prepare("SELECT 1 FROM schema_migrations WHERE versao = ?").get(versao);
+  if (ja) return false;
+  db.transaction(() => {
+    aplicar();
+    db.prepare("INSERT INTO schema_migrations (versao, nome) VALUES (?, ?)").run(versao, nome);
+  })();
+  return true;
+}
+
+// Migração 1: o schema ad hoc acima passa a ser a linha de base versionada.
+aplicarMigracao(1, "baseline", () => {});
+
+aplicarMigracao(2, "tentativas_snapshot", () => {
+  for (const coluna of ["mensagem_snapshot","destino_id","destino_nome","erro_codigo","erro_mensagem","plataforma","titulo","url_original"]) {
+    const existentes = db.prepare("PRAGMA table_info(tentativas_de_envio)").all() as Array<{ name: string }>;
+    if (!existentes.some((c) => c.name === coluna)) {
+      db.exec(`ALTER TABLE tentativas_de_envio ADD COLUMN ${coluna} TEXT`);
+    }
+  }
+  db.exec("UPDATE tentativas_de_envio SET origem = 'auto' WHERE origem = 'automatico'");
+  db.exec("UPDATE produtos SET origem_envio_em_andamento = 'auto' WHERE origem_envio_em_andamento = 'automatico'");
+  // Dado inventado: a Shopee nunca informou preço original.
+  db.exec("UPDATE produtos SET preco_original = NULL WHERE source_key = 'shopee'");
+});
 
 console.log(
   "banco de dados pronto: tabelas criadas, configs padrão aplicadas",

@@ -6,10 +6,11 @@ import {
   marcarComoEnviado,
   marcarEnvioAmbiguo,
   marcarFalhaEnvio,
+  gravarSnapshotTentativa,
   type TentativaEnvio,
 } from "../db/queries.js";
 import { executarEnvioProtegido } from "./dispatch.js";
-import { enviarProduto } from "./sender.js";
+import { enviarProduto, montarMensagemDoProduto } from "./sender.js";
 import { temAffiliateProvider } from "../integrations/registry.js";
 import {
   consultarOfertaShopeePorItem,
@@ -84,6 +85,7 @@ export async function reenviarManualIdempotente(
 
     let precoAtualEnvio = produto.preco_atual;
     let precoOriginalEnvio = produto.preco_original;
+    let descontoEnvio: number | null | undefined = produto.desconto_percentual;
 
     if (produto.source_key === "shopee") {
       const itemId = extrairItemIdShopee(produto.external_product_id);
@@ -118,26 +120,37 @@ export async function reenviarManualIdempotente(
         );
         return "failed";
       }
+      descontoEnvio = decisao.descontoPercentual;
       const novos = precosDaOfertaAtual({
         precoAtual: decisao.precoAtual,
         descontoPercentual: decisao.descontoPercentual,
       });
+      precoOriginalEnvio = novos.preco_original;
       if (novos.preco_atual !== produto.preco_atual) {
         atualizarPrecoProduto(produto.id, novos);
         precoAtualEnvio = novos.preco_atual;
-        precoOriginalEnvio = novos.preco_original;
       }
     }
 
     try {
-      await aguardarIntervaloAntesDaMensagem();
-      await enviar({
+      const dadosEnvio = {
         nome: produto.nome,
         preco_atual: precoAtualEnvio,
         preco_original: precoOriginalEnvio,
+        descontoPercentual: descontoEnvio,
         link_afiliado: produto.link_afiliado,
         imagem_url: produto.imagem_url,
+      };
+      gravarSnapshotTentativa(tentativa.id, {
+        mensagem: montarMensagemDoProduto(dadosEnvio),
+        destinoId: getConfig("whatsapp_grupo_id") || null,
+        destinoNome: getConfig("whatsapp_grupo_nome") || null,
+        plataforma: produto.source_key,
+        titulo: produto.nome,
+        urlOriginal: produto.link_original,
       });
+      await aguardarIntervaloAntesDaMensagem();
+      await enviar(dadosEnvio);
       marcarComoEnviado(produto.id, tentativa.id);
       return "sent";
     } catch (erro) {

@@ -38,7 +38,7 @@ export interface ProdutoShopeeConvertido {
   external_product_id: string;
   nome: string;
   preco_atual: string;
-  preco_original: string;
+  preco_original: string | null;
   desconto_percentual: number;
   imagem_url: string;
   link_original: string;
@@ -65,7 +65,6 @@ export function converterOfertaShopee(
   if (!Number.isFinite(desconto) || desconto < 1) return null;
   if (o.periodEndTime && o.periodEndTime <= agoraSegundos) return null;
 
-  const original = atual / (1 - Math.min(desconto, 95) / 100);
   // Formato limpo de URL, sem parâmetros extras (regra do manual da Shopee).
   const url = `https://shopee.com.br/product/${o.shopId}/${o.itemId}`;
 
@@ -74,7 +73,7 @@ export function converterOfertaShopee(
     external_product_id: `${o.shopId}_${o.itemId}`,
     nome: o.productName,
     preco_atual: formatarPreco(atual),
-    preco_original: formatarPreco(original),
+    preco_original: null,
     desconto_percentual: Math.round(desconto),
     imagem_url: o.imageUrl,
     link_original: url,
@@ -200,13 +199,15 @@ export async function consultarOfertaShopeePorItem(
 }
 
 // Preços formatados a partir da oferta atual da API. O "preco_original" é
-// estimado a partir do percentual (limitado a 95%), igual a converterOfertaShopee.
-export function precosDaOfertaAtual(atual: OfertaAtualShopee) {
-  const desconto = Math.min(atual.descontoPercentual, 95);
-  const original = atual.precoAtual / (1 - desconto / 100);
+// mantido como null, pois a Shopee não informa preço original.
+export function precosDaOfertaAtual(atual: OfertaAtualShopee): {
+  preco_atual: string;
+  preco_original: string | null;
+  desconto_percentual: number;
+} {
   return {
     preco_atual: formatarPreco(atual.precoAtual),
-    preco_original: formatarPreco(original),
+    preco_original: null,
     desconto_percentual: Math.round(atual.descontoPercentual),
   };
 }

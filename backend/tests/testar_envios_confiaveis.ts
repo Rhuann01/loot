@@ -38,6 +38,8 @@ const { enviarLote, obterConfigScheduler, salvarConfigScheduler } =
   await import("../src/auto/scheduler.js");
 const { reenviarManualIdempotente, statusHttpReenvioManual } =
   await import("../src/whatsapp/manual.js");
+const { montarMensagemDoProduto } =
+  await import("../src/whatsapp/sender.js");
 
 function limparBanco() {
   db.exec(
@@ -967,7 +969,7 @@ try {
       },
       rechecaOk(64, 60),
     );
-    assert.deepEqual(enviados, [{ atual: "64,00", original: "160,00" }]);
+    assert.deepEqual(enviados, [{ atual: "64,00", original: null }]);
     const p = buscarProdutoPorId(id);
     assert.equal(p?.preco_atual, "64,00");
     assert.equal(p?.desconto_percentual, 60);
@@ -1245,6 +1247,142 @@ try {
       ),
       "sent",
     );
+  }
+
+  // ---- Testes de Snapshot de Tentativa ----
+
+  // (a) PRAGMA table_info e schema_migrations
+  {
+    const colunas = (
+      db.prepare("PRAGMA table_info(tentativas_de_envio)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    for (const col of [
+      "mensagem_snapshot",
+      "destino_id",
+      "destino_nome",
+      "plataforma",
+      "titulo",
+      "url_original",
+    ]) {
+      assert.ok(colunas.includes(col), `coluna ${col} deve existir`);
+    }
+
+    const versoes = (
+      db.prepare("SELECT versao FROM schema_migrations").all() as Array<{
+        versao: number;
+      }>
+    ).map((r) => r.versao);
+    assert.ok(versoes.includes(1), "versao 1 deve existir");
+    assert.ok(versoes.includes(2), "versao 2 deve existir");
+  }
+
+  // (b) Envio automático Shopee
+  {
+    limparBanco();
+    setConfig("auto_envio_ativo", "true");
+    setConfig("limite_diario", "5");
+    setConfig("whatsapp_grupo_id", "123@g.us");
+    setConfig("whatsapp_grupo_nome", "Grupo Teste");
+
+    const id = criarProdutoShopee(
+      "30_30",
+      "https://shopee.com.br/product/30/30",
+      "https://s.shopee.com.br/abc30",
+    );
+    let capturado: any = null;
+    await enviarLote(
+      1,
+      async (produto) => {
+        capturado = produto;
+      },
+      rechecaOk(80, 50),
+    );
+
+    const tentativa = listarTentativasEnvio(id)[0];
+    assert.ok(tentativa);
+    assert.ok(tentativa.mensagem_snapshot?.includes("Por: *R$ 80,00*"));
+    assert.ok(tentativa.mensagem_snapshot?.includes("50% OFF"));
+    assert.ok(
+      tentativa.mensagem_snapshot?.includes("https://s.shopee.com.br/abc30"),
+    );
+    assert.ok(!tentativa.mensagem_snapshot?.includes("De:"));
+    assert.equal(tentativa.destino_id, "123@g.us");
+    assert.equal(tentativa.destino_nome, "Grupo Teste");
+    assert.equal(tentativa.plataforma, "shopee");
+    assert.equal(tentativa.titulo, "Produto 30_30");
+    assert.equal(tentativa.origem, "auto");
+    assert.ok(capturado);
+    assert.equal(
+      tentativa.mensagem_snapshot,
+      montarMensagemDoProduto(capturado),
+    );
+  }
+
+  // (c) Envio automático ML
+  {
+    limparBanco();
+    setConfig("auto_envio_ativo", "true");
+    setConfig("limite_diario", "5");
+    setConfig("whatsapp_grupo_id", "123@g.us");
+    setConfig("whatsapp_grupo_nome", "Grupo Teste");
+
+    const idMl = criarProdutoComLinks(
+      "MLB-SNAP",
+      "https://example.test/original-snap",
+      "https://example.test/afiliado-snap",
+    );
+    await enviarLote(1, async () => {});
+
+    const tentativa = listarTentativasEnvio(idMl)[0];
+    assert.ok(tentativa);
+    assert.ok(tentativa.mensagem_snapshot?.includes("De: ~R$ 100~"));
+    assert.ok(tentativa.mensagem_snapshot?.includes("Por: *R$ 80*"));
+  }
+
+  // (d) Reenvio manual Shopee
+  {
+    limparBanco();
+    setConfig("whatsapp_grupo_id", "123@g.us");
+    setConfig("whatsapp_grupo_nome", "Grupo Teste");
+
+    const id = criarProdutoShopee(
+      "31_31",
+      "https://shopee.com.br/product/31/31",
+      "https://s.shopee.com.br/abc31",
+    );
+    let capturadoManual: any = null;
+    const resultado = await reenviarManualIdempotente(
+      id,
+      "snap-manual-1",
+      async (produto) => {
+        capturadoManual = produto;
+      },
+      async () => ({ precoAtual: 80, descontoPercentual: 50 }),
+    );
+    assert.equal(resultado, "sent");
+    const tentativa = listarTentativasEnvio(id)[0];
+    assert.ok(tentativa);
+    assert.equal(tentativa.origem, "manual");
+    assert.ok(capturadoManual);
+    assert.equal(
+      tentativa.mensagem_snapshot,
+      montarMensagemDoProduto(capturadoManual),
+    );
+  }
+
+  // (e) Tentativa sem snapshot (legado)
+  {
+    const id = criarProduto("MLB-LEGADO-SNAP");
+    const res = db
+      .prepare(
+        "INSERT INTO tentativas_de_envio (produto_id, origem, status) VALUES (?, 'auto', 'sent') RETURNING *",
+      )
+      .get(id) as any;
+    assert.equal(res.mensagem_snapshot, null);
+    const doBanco = listarTentativasEnvio(id)[0];
+    assert.equal(doBanco?.mensagem_snapshot, null);
   }
 
   console.log("Resultado: envios confiáveis passou");

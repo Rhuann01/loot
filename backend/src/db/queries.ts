@@ -26,7 +26,7 @@ export interface Produto {
   criado_em: string;
 }
 
-export type OrigemEnvio = "manual" | "automatico";
+export type OrigemEnvio = "manual" | "auto" | "retry";
 
 export interface TentativaEnvio {
   id: number;
@@ -36,13 +36,21 @@ export interface TentativaEnvio {
   motivo: string | null;
   iniciado_em: string;
   finalizado_em: string | null;
+  mensagem_snapshot: string | null;
+  destino_id: string | null;
+  destino_nome: string | null;
+  plataforma: string | null;
+  titulo: string | null;
+  url_original: string | null;
+  erro_codigo: string | null;
+  erro_mensagem: string | null;
 }
 interface NovoProduto {
   source_key?: string;
   external_product_id: string;
   nome: string;
   preco_atual: string;
-  preco_original?: string;
+  preco_original?: string | null;
   desconto_percentual?: number;
   imagem_url?: string;
   link_original?: string;
@@ -349,12 +357,12 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
     if (!produto) return undefined;
 
     db.prepare(
-      `UPDATE produtos SET origem_envio_em_andamento = 'automatico' WHERE id = ?`,
+      `UPDATE produtos SET origem_envio_em_andamento = 'auto' WHERE id = ?`,
     ).run(produto.id);
     const tentativa = db
       .prepare(
         `INSERT INTO tentativas_de_envio (produto_id, origem, status)
-         VALUES (?, 'automatico', 'sending') RETURNING *`,
+         VALUES (?, 'auto', 'sending') RETURNING *`,
       )
       .get(produto.id) as TentativaEnvio;
     return {
@@ -424,7 +432,7 @@ export function atualizarPrecoProduto(
   produtoId: number,
   precos: {
     preco_atual: string;
-    preco_original: string;
+    preco_original: string | null;
     desconto_percentual: number;
   },
 ) {
@@ -570,6 +578,17 @@ export function buscarTentativaEnvioPorId(id: number): TentativaEnvio | undefine
     .get(id) as TentativaEnvio | undefined;
 }
 
+export function gravarSnapshotTentativa(tentativaId: number, d: {
+  mensagem: string; destinoId: string | null; destinoNome: string | null;
+  plataforma: string; titulo: string; urlOriginal: string | null;
+}) {
+  db.prepare(
+    `UPDATE tentativas_de_envio
+     SET mensagem_snapshot = ?, destino_id = ?, destino_nome = ?, plataforma = ?, titulo = ?, url_original = ?
+     WHERE id = ?`,
+  ).run(d.mensagem, d.destinoId, d.destinoNome, d.plataforma, d.titulo, d.urlOriginal, tentativaId);
+}
+
 export function recuperarEnviosAbandonados(): number {
   const token = randomUUID();
   if (!adquirirLockExecucao("whatsapp_envio", token, 30_000)) return 0;
@@ -601,7 +620,7 @@ export function recuperarEnviosAbandonados(): number {
             `INSERT INTO tentativas_de_envio
              (produto_id, origem, status, motivo, finalizado_em)
              VALUES (?, ?, 'ambiguous', ?, CURRENT_TIMESTAMP)`,
-          ).run(produto.id, produto.origem_envio_em_andamento ?? "automatico", motivo);
+          ).run(produto.id, produto.origem_envio_em_andamento ?? "auto", motivo);
         }
       }
       return produtos.length;
@@ -827,4 +846,52 @@ export function atualizarCookieSessao(provedor: string, cookie: string) {
     WHERE provedor = ?
   `,
   ).run(cookie, provedor);
+}
+
+export type AbaProdutos = "all" | "pending" | "sent" | "failed" | "ambiguous" | "not_sent";
+export const ABAS_PRODUTOS: readonly AbaProdutos[] = ["all","pending","sent","failed","ambiguous","not_sent"];
+
+const CONDICAO_ABA: Record<AbaProdutos, string> = {
+  all: "1 = 1",
+  pending: "p.enviado = 0 AND p.status_fila IN ('pending','sending')",
+  sent: "(p.status_fila = 'sent' OR p.enviado = 1)",
+  failed: "p.status_fila = 'failed' AND p.enviado = 0",
+  ambiguous: "p.status_fila = 'ambiguous' AND p.enviado = 0",
+  not_sent: "p.enviado = 0",
+};
+
+export interface ProdutoComPlataforma extends Produto { plataforma_nome: string }
+
+function filtroBusca(q: string | undefined) {
+  const termo = q?.trim();
+  if (!termo) return { sql: "", params: [] as string[] };
+  const escapado = termo.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return { sql: " AND p.nome LIKE ? ESCAPE '\\'", params: [`%${escapado}%`] };
+}
+
+export function listarProdutosPaginado(opcoes: { q?: string | undefined; aba: AbaProdutos; page: number; limit: number }) {
+  const busca = filtroBusca(opcoes.q);
+  const where = `${CONDICAO_ABA[opcoes.aba]}${busca.sql}`;
+  const items = db.prepare(
+    `SELECT p.*, COALESCE(c.nome, p.source_key) AS plataforma_nome
+     FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key
+     WHERE ${where}
+     ORDER BY datetime(p.criado_em) DESC, p.id DESC
+     LIMIT ? OFFSET ?`,
+  ).all(...busca.params, opcoes.limit, (opcoes.page - 1) * opcoes.limit) as ProdutoComPlataforma[];
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM produtos p WHERE ${where}`).get(...busca.params) as { n: number }).n;
+  const contagens = {} as Record<AbaProdutos, number>;
+  for (const aba of ABAS_PRODUTOS) {
+    contagens[aba] = (db.prepare(
+      `SELECT COUNT(*) AS n FROM produtos p WHERE ${CONDICAO_ABA[aba]}${busca.sql}`,
+    ).get(...busca.params) as { n: number }).n;
+  }
+  return { items, total, contagens };
+}
+
+export function buscarProdutoComPlataforma(id: number): ProdutoComPlataforma | undefined {
+  return db.prepare(
+    `SELECT p.*, COALESCE(c.nome, p.source_key) AS plataforma_nome
+     FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key WHERE p.id = ?`,
+  ).get(id) as ProdutoComPlataforma | undefined;
 }

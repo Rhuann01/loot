@@ -34,7 +34,7 @@ try {
   assert.ok(caso1);
   assert.equal(caso1.external_product_id, "222_111");
   assert.equal(caso1.preco_atual, "80,00");
-  assert.equal(caso1.preco_original, "100,00");
+  assert.equal(caso1.preco_original, null);
   assert.equal(caso1.desconto_percentual, 20);
   assert.equal(caso1.link_original, "https://shopee.com.br/product/222/111");
   assert.equal(caso1.link_afiliado, "https://shopee.com.br/product/222/111");
@@ -131,7 +131,7 @@ try {
   );
   assert.ok(caso7);
   assert.equal(caso7.preco_atual, "199,90");
-  assert.equal(caso7.preco_original, "285,57");
+  assert.equal(caso7.preco_original, null);
 
   // Recheca (descontoMinimo = 20, precoGuardado = "100,00")
   assert.deepEqual(
@@ -172,11 +172,11 @@ try {
   // precosDaOfertaAtual
   assert.deepEqual(
     precosDaOfertaAtual({ precoAtual: 64, descontoPercentual: 60 }),
-    { preco_atual: "64,00", preco_original: "160,00", desconto_percentual: 60 },
+    { preco_atual: "64,00", preco_original: null, desconto_percentual: 60 },
   );
   assert.deepEqual(
     precosDaOfertaAtual({ precoAtual: 5, descontoPercentual: 99 }),
-    { preco_atual: "5,00", preco_original: "100,00", desconto_percentual: 99 },
+    { preco_atual: "5,00", preco_original: null, desconto_percentual: 99 },
   );
 
   // periodEndTime "2999" = sem fim informado: converte e não grava oferta_expira_em
