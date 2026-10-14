@@ -385,6 +385,38 @@ try {
     );
   }
 
+  // Virada do dia em Brasília: envio às 22h de Brasília (01h UTC do dia seguinte)
+  // pertence ao dia de Brasília, não ao dia UTC.
+  limparBanco();
+  setConfig("limite_diario", "1");
+  {
+    const idEnviado = criarProduto("MLB-DIA-BRASILIA", 50);
+    criarProduto("MLB-PROXIMO", 40);
+    const brasiliaHoje = (
+      db.prepare("SELECT date('now', '-3 hours') AS d").get() as { d: string }
+    ).d;
+    // Instante UTC que cai às 22h de Brasília de "hoje em Brasília".
+    const enviadoEmUtc = `${brasiliaHoje} 22:00:00`.replace(
+      /^(\d{4}-\d{2}-\d{2}) 22:00:00$/,
+      (_m, dia: string) => {
+        const base = new Date(`${dia}T22:00:00-03:00`);
+        return base.toISOString().slice(0, 19).replace("T", " ");
+      },
+    );
+    db.prepare(
+      "UPDATE produtos SET enviado = 1, status_fila = 'sent' WHERE id = ?",
+    ).run(idEnviado);
+    db.prepare("INSERT INTO envios (produto_id, enviado_em) VALUES (?, ?)").run(
+      idEnviado,
+      enviadoEmUtc,
+    );
+    assert.equal(
+      queries.enviosHoje(),
+      1,
+      "envio de 22h de Brasília deve contar no dia de Brasília",
+    );
+  }
+
   console.log("Resultado: fila de ofertas passou");
 } finally {
   db.close();

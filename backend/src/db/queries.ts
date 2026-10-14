@@ -1,5 +1,6 @@
 import db from "./index.js";
 import { randomUUID } from "node:crypto";
+import { SQL_HOJE_BRASILIA, sqlDiaBrasilia } from "../lib/time.js";
 
 export interface Produto {
   id: number;
@@ -315,24 +316,24 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
           (
             (SELECT COUNT(*) FROM envios e
                JOIN produtos pe ON pe.id = e.produto_id
-              WHERE date(e.enviado_em) = date('now')
+              WHERE ${sqlDiaBrasilia("e.enviado_em")} = ${SQL_HOJE_BRASILIA}
                 AND pe.source_key = c.source_key)
             +
             (SELECT COUNT(*) FROM produtos ps
               WHERE ps.enviado = 0
                 AND ps.status_fila = 'sending'
-                AND date(ps.envio_iniciado_em) = date('now')
+                AND ${sqlDiaBrasilia("ps.envio_iniciado_em")} = ${SQL_HOJE_BRASILIA}
                 AND ps.source_key = c.source_key)
           ) ASC,
           c.desconto_percentual DESC, datetime(c.criado_em) DESC, c.id DESC
         LIMIT 1
       )
       AND (
-        (SELECT COUNT(*) FROM envios WHERE date(enviado_em) = date('now')) +
+        (SELECT COUNT(*) FROM envios WHERE ${sqlDiaBrasilia("enviado_em")} = ${SQL_HOJE_BRASILIA}) +
         (SELECT COUNT(*) FROM produtos
          WHERE enviado = 0
            AND status_fila = 'sending'
-           AND date(envio_iniciado_em) = date('now'))
+           AND ${sqlDiaBrasilia("envio_iniciado_em")} = ${SQL_HOJE_BRASILIA})
       ) < ?
       RETURNING *
     `,
@@ -647,7 +648,7 @@ export function enviosHoje(): number {
   const resultado = db
     .prepare(
       `
-    SELECT COUNT(*) as total FROM envios WHERE date(enviado_em) = date('now')
+    SELECT COUNT(*) as total FROM envios WHERE ${sqlDiaBrasilia("enviado_em")} = ${SQL_HOJE_BRASILIA}
   `,
     )
     .get() as { total: number };
