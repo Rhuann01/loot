@@ -17,6 +17,7 @@ import {
   esgotarTentativasProduto,
   cancelarReservaSemConsumirTentativa,
   gravarSnapshotTentativa,
+  gravarAtividade,
 } from "../db/queries.js";
 import {
   consultarOfertaShopeePorItem,
@@ -153,6 +154,14 @@ export async function enviarLote(
               tentativa.id,
             );
             if (!atual) esgotarTentativasProduto(produto.id);
+            gravarAtividade({
+              tipo: "recheca_descarte",
+              integracao_key: "shopee",
+              produto_id: produto.id,
+              tentativa_id: tentativa.id,
+              titulo: "Produto descartado pela recheca Shopee",
+              detalhe: decisao.motivo,
+            });
             console.log(
               `scheduler: ${produto.id} descartado pela recheca (${decisao.motivo})`,
             );
@@ -374,6 +383,11 @@ export function salvarConfigScheduler(config: ConfigScheduler) {
     "intervalo_entre_mensagens_ms",
     String(config.intervalo_entre_mensagens_ms),
   );
+  gravarAtividade({
+    tipo: "configuracao_scheduler",
+    titulo: "Configuração do agendador atualizada",
+    detalhe: `Ativo: ${config.ativo}, Limite: ${config.limite_diario}`,
+  });
   recarregarScheduler();
 }
 

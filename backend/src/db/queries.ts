@@ -30,7 +30,7 @@ export type OrigemEnvio = "manual" | "auto" | "retry";
 
 export interface TentativaEnvio {
   id: number;
-  produto_id: number;
+  produto_id: number | null;
   origem: OrigemEnvio;
   status: "sending" | "sent" | "failed" | "ambiguous" | "cancelled";
   motivo: string | null;
@@ -45,18 +45,20 @@ export interface TentativaEnvio {
   erro_codigo: string | null;
   erro_mensagem: string | null;
 }
-interface NovoProduto {
-  source_key?: string;
+export interface NovoProduto {
+  source_key?: string | undefined;
   external_product_id: string;
   nome: string;
   preco_atual: string;
-  preco_original?: string | null;
-  desconto_percentual?: number;
-  imagem_url?: string;
-  link_original?: string;
+  preco_original?: string | null | undefined;
+  desconto_percentual?: number | undefined;
+  imagem_url?: string | null | undefined;
+  link_original?: string | null | undefined;
   link_afiliado: string;
-  categoria_id?: string;
-  oferta_expira_em?: number;
+  categoria_id?: string | null | undefined;
+  oferta_expira_em?: number | null | undefined;
+  comissao_valor?: number | null | undefined;
+  comissao_percentual?: number | null | undefined;
 }
 
 export function salvarProduto(produto: NovoProduto) {
@@ -96,6 +98,25 @@ export function salvarProduto(produto: NovoProduto) {
       criado_em = CURRENT_TIMESTAMP
   `);
   inserir.run(dados);
+
+  if (
+    dados.source_key === "shopee" &&
+    (produto.comissao_valor != null || produto.comissao_percentual != null)
+  ) {
+    const salvo = db
+      .prepare(
+        "SELECT id FROM produtos WHERE source_key = ? AND external_product_id = ?",
+      )
+      .get(dados.source_key, dados.external_product_id) as { id: number } | undefined;
+    if (salvo) {
+      gravarSnapshotComissao({
+        produto_id: salvo.id,
+        integracao_key: "shopee",
+        comissao_valor: produto.comissao_valor,
+        comissao_percentual: produto.comissao_percentual,
+      });
+    }
+  }
 }
 
 export function limparProdutosAntigos(): number {
@@ -287,6 +308,16 @@ export function marcarComoEnviado(produtoId: number, tentativaId?: number) {
       ).run(tentativaId, produtoId);
     }
     db.prepare(`INSERT INTO envios (produto_id) VALUES (?)`).run(produtoId);
+
+    const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+    gravarAtividade({
+      tipo: "envio_sucesso",
+      integracao_key: prod?.source_key ?? null,
+      produto_id: produtoId || null,
+      tentativa_id: tentativaId ?? null,
+      titulo: `Envio concluído: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+      detalhe: "Mensagem enviada com sucesso",
+    });
   });
   transacao();
 }
@@ -402,6 +433,16 @@ export function marcarFalhaEnvio(
        WHERE id = ? AND produto_id = ? AND status = 'sending'`,
     ).run(erro.slice(0, 500), tentativaId, produtoId);
   }
+
+  const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+  gravarAtividade({
+    tipo: "envio_falha",
+    integracao_key: prod?.source_key ?? null,
+    produto_id: produtoId || null,
+    tentativa_id: tentativaId ?? null,
+    titulo: `Falha no envio: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+    detalhe: erro ? erro.slice(0, 200) : "Falha desconhecida",
+  });
 }
 
 export function marcarEnvioAmbiguo(
@@ -426,6 +467,16 @@ export function marcarEnvioAmbiguo(
        WHERE id = ? AND produto_id = ? AND status = 'sending'`,
     ).run(erro.slice(0, 500), tentativaId, produtoId);
   }
+
+  const prod = produtoId ? buscarProdutoPorId(produtoId) : undefined;
+  gravarAtividade({
+    tipo: "envio_ambiguo",
+    integracao_key: prod?.source_key ?? null,
+    produto_id: produtoId || null,
+    tentativa_id: tentativaId ?? null,
+    titulo: `Envio com status ambíguo: ${prod?.nome ? prod.nome.slice(0, 50) : `Produto ${produtoId}`}`,
+    detalhe: erro ? erro.slice(0, 200) : "Status de entrega incerto",
+  });
 }
 
 export function atualizarPrecoProduto(
@@ -719,6 +770,135 @@ export function listarIntegracoes(): IntegrationView[] {
   }));
 }
 
+export interface PlatformState {
+  key: string;
+  nome: string;
+  status: string;
+  available: boolean;
+  ativo: boolean;
+  ultimaSincronizacao: string | null;
+  totalProdutos: number;
+  comissaoHoje: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: true;
+    motivo?: string | undefined;
+  };
+  erro: string | null;
+  motivo?: string | undefined;
+}
+
+export function obterEstadoPlataforma(key: string): PlatformState | null {
+  const row = db
+    .prepare(
+      `SELECT c.key, c.nome, c.available, s.active, s.status,
+              s.ultima_sincronizacao, s.last_checked_at, s.last_connected_at,
+              s.ultimo_erro, s.last_error
+       FROM integration_catalog c
+       JOIN store_integrations s ON s.integration_key = c.key
+       WHERE c.key = ?`,
+    )
+    .get(key) as
+    | {
+        key: string;
+        nome: string;
+        available: number;
+        active: number;
+        status: string;
+        ultima_sincronizacao: string | null;
+        last_checked_at: string | null;
+        last_connected_at: string | null;
+        ultimo_erro: string | null;
+        last_error: string | null;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  const totalProdutos = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM produtos WHERE source_key = ?`)
+      .get(row.key) as { n: number }
+  ).n;
+
+  let comissaoHoje: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: true;
+    motivo?: string | undefined;
+  };
+
+  if (row.key === "shopee") {
+    const resHoje = consultarComissaoDoDia("shopee");
+    comissaoHoje = {
+      valor: resHoje.valor,
+      disponivel: resHoje.disponivel,
+      estimada: true,
+    };
+  } else {
+    comissaoHoje = {
+      valor: null,
+      disponivel: false,
+      estimada: true,
+    };
+  }
+
+  const ultimaSincronizacao =
+    row.ultima_sincronizacao ?? row.last_checked_at ?? null;
+  const erro = row.ultimo_erro ?? row.last_error ?? null;
+  const available = Boolean(row.available);
+
+  return {
+    key: row.key,
+    nome: row.nome,
+    status: row.status,
+    available,
+    ativo: Boolean(row.active),
+    ultimaSincronizacao,
+    totalProdutos,
+    comissaoHoje,
+    erro,
+    ...(available ? {} : { motivo: "Não disponível nesta versão" }),
+  };
+}
+
+export function listarPlataformas(): PlatformState[] {
+  const catalog = db
+    .prepare(`SELECT key FROM integration_catalog ORDER BY key`)
+    .all() as Array<{ key: string }>;
+
+  return catalog
+    .map((c) => obterEstadoPlataforma(c.key))
+    .filter((p): p is PlatformState => p !== null);
+}
+
+export function atualizarSincronizacaoPlataforma(
+  key: string,
+  dados: {
+    status?: string | undefined;
+    ultimaSincronizacao?: string | null | undefined;
+    ultimoErro?: string | null | undefined;
+  },
+) {
+  db.prepare(
+    `UPDATE store_integrations
+     SET status = COALESCE(?, status),
+         ultima_sincronizacao = COALESCE(?, ultima_sincronizacao),
+         last_checked_at = COALESCE(?, last_checked_at),
+         ultimo_erro = ?,
+         last_error = ?,
+         atualizado_em = CURRENT_TIMESTAMP
+     WHERE integration_key = ?`,
+  ).run(
+    dados.status ?? null,
+    dados.ultimaSincronizacao ?? null,
+    dados.ultimaSincronizacao ?? null,
+    dados.ultimoErro ?? null,
+    dados.ultimoErro ?? null,
+    key,
+  );
+}
+
 export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
   const result = db
     .prepare(
@@ -738,6 +918,7 @@ export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
     .run(active ? 1 : 0, active ? 1 : 0, active ? 1 : 0, key);
 
   if (result.changes === 0) throw new Error("integração não encontrada");
+  return obterEstadoPlataforma(key);
 }
 
 export function atualizarStatusIntegracao(
@@ -895,3 +1076,283 @@ export function buscarProdutoComPlataforma(id: number): ProdutoComPlataforma | u
      FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key WHERE p.id = ?`,
   ).get(id) as ProdutoComPlataforma | undefined;
 }
+
+export function buscarProdutoPorExternalId(
+  sourceKey: string,
+  externalProductId: string,
+): Produto | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM produtos WHERE source_key = ? AND external_product_id = ?`,
+    )
+    .get(sourceKey, externalProductId) as Produto | undefined;
+}
+
+export interface ComissaoSnapshot {
+  id: number;
+  produto_id: number | null;
+  integracao_key: string;
+  comissao_valor: number | null;
+  comissao_percentual: number | null;
+  estimada: number;
+  coletado_em: string;
+}
+
+export interface NovoSnapshotComissao {
+  produto_id?: number | null | undefined;
+  integracao_key: string;
+  comissao_valor?: number | null | undefined;
+  comissao_percentual?: number | null | undefined;
+  estimada?: number | undefined;
+}
+
+export function gravarSnapshotComissao(
+  dados: NovoSnapshotComissao,
+): ComissaoSnapshot | null {
+  // Mercado Livre não possui fonte confirmada de comissão
+  if (dados.integracao_key === "mercado_livre") {
+    return null;
+  }
+
+  const valor =
+    dados.comissao_valor !== undefined &&
+    dados.comissao_valor !== null &&
+    !Number.isNaN(dados.comissao_valor)
+      ? Number(dados.comissao_valor)
+      : null;
+
+  const percentual =
+    dados.comissao_percentual !== undefined &&
+    dados.comissao_percentual !== null &&
+    !Number.isNaN(dados.comissao_percentual)
+      ? Number(dados.comissao_percentual)
+      : null;
+
+  // Não gravar snapshot vazio
+  if (valor === null && percentual === null) {
+    return null;
+  }
+
+  const estimada = 1; // Sempre estimativa
+
+  const snapshot = db
+    .prepare(
+      `INSERT INTO comissao_snapshots (produto_id, integracao_key, comissao_valor, comissao_percentual, estimada)
+       VALUES (?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      dados.produto_id ?? null,
+      dados.integracao_key,
+      valor,
+      percentual,
+      estimada,
+    ) as ComissaoSnapshot;
+
+  gravarAtividade({
+    tipo: "comissao_snapshot",
+    integracao_key: dados.integracao_key,
+    produto_id: dados.produto_id ?? null,
+    titulo: "Snapshot de comissão registrado",
+    detalhe: `Valor: ${valor !== null ? valor : "n/a"}, Taxa: ${percentual !== null ? percentual : "n/a"}`,
+  });
+
+  return snapshot;
+}
+
+export function listarSnapshotsComissao(produtoId: number): ComissaoSnapshot[] {
+  return db
+    .prepare(
+      `SELECT * FROM comissao_snapshots WHERE produto_id = ? ORDER BY id DESC`,
+    )
+    .all(produtoId) as ComissaoSnapshot[];
+}
+
+export function obterUltimaComissao(produtoId: number): ComissaoSnapshot | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM comissao_snapshots WHERE produto_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(produtoId) as ComissaoSnapshot | undefined;
+  return row ?? null;
+}
+
+export interface ResumoComissaoDia {
+  valor: number | null;
+  disponivel: boolean;
+  estimada: true;
+}
+
+export function consultarComissaoDoDia(
+  integracaoKey: string = "shopee",
+): ResumoComissaoDia {
+  const row = db
+    .prepare(
+      `SELECT SUM(comissao_valor) as total_valor, COUNT(*) as qtd
+       FROM comissao_snapshots
+       WHERE integracao_key = ?
+         AND ${sqlDiaBrasilia("coletado_em")} = ${SQL_HOJE_BRASILIA}
+         AND comissao_valor IS NOT NULL`,
+    )
+    .get(integracaoKey) as { total_valor: number | null; qtd: number } | undefined;
+
+  if (!row || row.qtd === 0 || row.total_valor === null) {
+    return {
+      valor: null,
+      disponivel: false,
+      estimada: true,
+    };
+  }
+
+  return {
+    valor: Number(row.total_valor.toFixed(2)),
+    disponivel: true,
+    estimada: true,
+  };
+}
+
+export interface Atividade {
+  id: number;
+  tipo: string;
+  integracao_key: string | null;
+  produto_id: number | null;
+  tentativa_id: number | null;
+  titulo: string;
+  detalhe: string | null;
+  criado_em: string;
+}
+
+export function sanitizarTextoAtividade(
+  texto: string | null | undefined,
+): string | null {
+  if (!texto) return null;
+  let limpo = texto;
+  limpo = limpo.replace(/cookie[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/csrf[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/token[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/secret[^\s,;]*/gi, "[redigido]");
+  return limpo.slice(0, 500);
+}
+
+export function gravarAtividade(dados: {
+  tipo: string;
+  integracao_key?: string | null | undefined;
+  produto_id?: number | null | undefined;
+  tentativa_id?: number | null | undefined;
+  titulo: string;
+  detalhe?: string | null | undefined;
+}): Atividade {
+  const tituloLimpo = sanitizarTextoAtividade(dados.titulo) ?? dados.tipo;
+  const detalheLimpo = sanitizarTextoAtividade(dados.detalhe);
+
+  const row = db
+    .prepare(
+      `INSERT INTO atividades (tipo, integracao_key, produto_id, tentativa_id, titulo, detalhe)
+       VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      dados.tipo,
+      dados.integracao_key ?? null,
+      dados.produto_id ?? null,
+      dados.tentativa_id ?? null,
+      tituloLimpo,
+      detalheLimpo,
+    ) as Atividade;
+
+  return row;
+}
+
+export interface FiltroAtividades {
+  page?: number | undefined;
+  limit?: number | undefined;
+  tipo?: string | undefined;
+  integracao_key?: string | undefined;
+  plataforma?: string | undefined;
+}
+
+export function listarAtividades(filtro: FiltroAtividades = {}): {
+  items: Atividade[];
+  total: number;
+} {
+  const page = Math.max(1, filtro.page ?? 1);
+  const limit = Math.max(1, Math.min(100, filtro.limit ?? 20));
+  const offset = (page - 1) * limit;
+
+  const condicoes: string[] = [];
+  const params: unknown[] = [];
+
+  if (filtro.tipo) {
+    condicoes.push("tipo = ?");
+    params.push(filtro.tipo);
+  }
+
+  const integracao = filtro.plataforma || filtro.integracao_key;
+  if (integracao) {
+    condicoes.push("integracao_key = ?");
+    params.push(integracao);
+  }
+
+  const whereClause =
+    condicoes.length > 0 ? `WHERE ${condicoes.join(" AND ")}` : "";
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM atividades ${whereClause}`)
+      .get(...params) as { n: number }
+  ).n;
+
+  const items = db
+    .prepare(
+      `SELECT * FROM atividades ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as Atividade[];
+
+  return { items, total };
+}
+
+export interface FiltroEnvios {
+  page?: number | undefined;
+  limit?: number | undefined;
+  status?: string | undefined;
+  plataforma?: string | undefined;
+}
+
+export function listarEnviosPaginado(filtro: FiltroEnvios = {}): {
+  items: TentativaEnvio[];
+  total: number;
+} {
+  const page = Math.max(1, filtro.page ?? 1);
+  const limit = Math.max(1, Math.min(100, filtro.limit ?? 20));
+  const offset = (page - 1) * limit;
+
+  const condicoes: string[] = [];
+  const params: unknown[] = [];
+
+  if (filtro.status && filtro.status !== "all") {
+    condicoes.push("status = ?");
+    params.push(filtro.status);
+  }
+
+  if (filtro.plataforma) {
+    condicoes.push("plataforma = ?");
+    params.push(filtro.plataforma);
+  }
+
+  const whereClause =
+    condicoes.length > 0 ? `WHERE ${condicoes.join(" AND ")}` : "";
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM tentativas_de_envio ${whereClause}`)
+      .get(...params) as { n: number }
+  ).n;
+
+  const items = db
+    .prepare(
+      `SELECT * FROM tentativas_de_envio ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as TentativaEnvio[];
+
+  return { items, total };
+}
+
+

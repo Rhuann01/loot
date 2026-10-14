@@ -20,6 +20,8 @@ db.exec(`
     last_connected_at TEXT,
     last_checked_at TEXT,
     last_error TEXT,
+    ultima_sincronizacao TEXT,
+    ultimo_erro TEXT,
     criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (integration_key) REFERENCES integration_catalog(key)
@@ -71,22 +73,23 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS tentativas_de_envio (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    produto_id INTEGER NOT NULL,
+    produto_id INTEGER,
     origem TEXT NOT NULL,
     status TEXT NOT NULL,
     motivo TEXT,
     iniciado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     finalizado_em TEXT,
-    FOREIGN KEY (produto_id) REFERENCES produtos(id)
+    FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS idempotencias_reenvio_manual (
     chave TEXT PRIMARY KEY,
-    produto_id INTEGER NOT NULL,
+    produto_id INTEGER,
     tentativa_id INTEGER NOT NULL UNIQUE,
+    payload_hash TEXT,
     criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (produto_id) REFERENCES produtos(id),
-    FOREIGN KEY (tentativa_id) REFERENCES tentativas_de_envio(id)
+    FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE SET NULL,
+    FOREIGN KEY (tentativa_id) REFERENCES tentativas_de_envio(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS locks_execucao (
@@ -313,6 +316,66 @@ aplicarMigracao(2, "tentativas_snapshot", () => {
   db.exec("UPDATE produtos SET origem_envio_em_andamento = 'auto' WHERE origem_envio_em_andamento = 'automatico'");
   // Dado inventado: a Shopee nunca informou preço original.
   db.exec("UPDATE produtos SET preco_original = NULL WHERE source_key = 'shopee'");
+});
+
+aplicarMigracao(3, "historico_comissao_atividades", () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS comissao_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      produto_id INTEGER,
+      integracao_key TEXT NOT NULL,
+      comissao_valor REAL,
+      comissao_percentual REAL,
+      estimada INTEGER NOT NULL DEFAULT 1,
+      coletado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS atividades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tipo TEXT NOT NULL,
+      integracao_key TEXT,
+      produto_id INTEGER,
+      tentativa_id INTEGER,
+      titulo TEXT NOT NULL,
+      detalhe TEXT,
+      criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE SET NULL,
+      FOREIGN KEY (tentativa_id) REFERENCES tentativas_de_envio(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_comissao_snapshots_coletado_em
+      ON comissao_snapshots(coletado_em);
+    CREATE INDEX IF NOT EXISTS idx_comissao_snapshots_integracao
+      ON comissao_snapshots(integracao_key);
+    CREATE INDEX IF NOT EXISTS idx_atividades_criado_em
+      ON atividades(criado_em);
+    CREATE INDEX IF NOT EXISTS idx_atividades_integracao
+      ON atividades(integracao_key);
+  `);
+});
+
+aplicarMigracao(4, "plataformas_sincronizacao", () => {
+  const colunas = db
+    .prepare("PRAGMA table_info(store_integrations)")
+    .all() as Array<{ name: string }>;
+  const nomes = new Set(colunas.map((c) => c.name));
+  if (!nomes.has("ultima_sincronizacao")) {
+    db.exec("ALTER TABLE store_integrations ADD COLUMN ultima_sincronizacao TEXT");
+  }
+  if (!nomes.has("ultimo_erro")) {
+    db.exec("ALTER TABLE store_integrations ADD COLUMN ultimo_erro TEXT");
+  }
+});
+
+aplicarMigracao(5, "idempotencias_manual_hash", () => {
+  const colunas = db
+    .prepare("PRAGMA table_info(idempotencias_reenvio_manual)")
+    .all() as Array<{ name: string }>;
+  const nomes = new Set(colunas.map((c) => c.name));
+  if (!nomes.has("payload_hash")) {
+    db.exec("ALTER TABLE idempotencias_reenvio_manual ADD COLUMN payload_hash TEXT");
+  }
 });
 
 console.log(

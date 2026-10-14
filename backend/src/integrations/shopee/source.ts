@@ -1,6 +1,7 @@
 import { shopeeRequest } from "./client.js";
 import {
   atualizarStatusIntegracao,
+  gravarAtividade,
   limparProdutosAntigos,
   salvarProduto,
   setConfig,
@@ -31,6 +32,8 @@ export interface OfertaShopee {
   priceMin: string;
   priceDiscountRate: number;
   periodEndTime?: number | null;
+  commission?: string | number | null;
+  commissionRate?: string | number | null;
 }
 
 export interface ProdutoShopeeConvertido {
@@ -44,6 +47,8 @@ export interface ProdutoShopeeConvertido {
   link_original: string;
   link_afiliado: string;
   oferta_expira_em?: number;
+  comissao_valor?: number | null;
+  comissao_percentual?: number | null;
 }
 
 const MAX_PAGINAS = 2;
@@ -68,6 +73,18 @@ export function converterOfertaShopee(
   // Formato limpo de URL, sem parâmetros extras (regra do manual da Shopee).
   const url = `https://shopee.com.br/product/${o.shopId}/${o.itemId}`;
 
+  let comissao_valor: number | null = null;
+  if (o.commission !== undefined && o.commission !== null && o.commission !== "") {
+    const v = Number(o.commission);
+    if (Number.isFinite(v)) comissao_valor = v;
+  }
+
+  let comissao_percentual: number | null = null;
+  if (o.commissionRate !== undefined && o.commissionRate !== null && o.commissionRate !== "") {
+    const r = Number(o.commissionRate);
+    if (Number.isFinite(r)) comissao_percentual = r;
+  }
+
   return {
     source_key: "shopee",
     external_product_id: `${o.shopId}_${o.itemId}`,
@@ -79,6 +96,8 @@ export function converterOfertaShopee(
     link_original: url,
     // O link de afiliado NÃO é gerado aqui; é gerado depois da reserva, no envio.
     link_afiliado: url,
+    comissao_valor,
+    comissao_percentual,
     ...(o.periodEndTime && o.periodEndTime <= LIMITE_PERIODO_SEM_FIM
       ? { oferta_expira_em: o.periodEndTime }
       : {}),
@@ -114,11 +133,23 @@ export async function coletarOfertasShopee(): Promise<number> {
       conectadoEm: new Date().toISOString(),
     });
     setConfig("shopee_ultimo_resultado", String(salvas));
+    gravarAtividade({
+      tipo: "coleta_sucesso",
+      integracao_key: "shopee",
+      titulo: "Coleta Shopee concluída",
+      detalhe: `${salvas} ofertas salvas`,
+    });
     return salvas;
   } catch (erro) {
     const mensagem = erro instanceof Error ? erro.message : String(erro);
     atualizarStatusIntegracao("shopee", "disconnected", {
       erro: mensagem.slice(0, 500),
+    });
+    gravarAtividade({
+      tipo: "coleta_falha",
+      integracao_key: "shopee",
+      titulo: "Falha na coleta Shopee",
+      detalhe: mensagem.slice(0, 200),
     });
     throw erro;
   }
@@ -127,6 +158,10 @@ export async function coletarOfertasShopee(): Promise<number> {
 export interface OfertaAtualShopee {
   precoAtual: number;
   descontoPercentual: number;
+  nome?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  commission?: string | number | null | undefined;
+  commissionRate?: string | number | null | undefined;
 }
 
 export type DecisaoRecheca =
@@ -179,12 +214,14 @@ export async function consultarOfertaShopeePorItem(
     productOfferV2: {
       nodes: Array<{
         itemId: number | string;
+        productName?: string;
+        imageUrl?: string;
         priceMin: string;
         priceDiscountRate: number;
       }>;
     };
   }>(
-    `query { productOfferV2(itemId: ${itemId}, page: 1, limit: 5) { nodes { itemId priceMin priceDiscountRate } } }`,
+    `query { productOfferV2(itemId: ${itemId}, page: 1, limit: 5) { nodes { itemId productName imageUrl priceMin priceDiscountRate } } }`,
   );
 
   const no = data.productOfferV2.nodes.find((n) => String(n.itemId) === itemId);
@@ -195,6 +232,8 @@ export async function consultarOfertaShopeePorItem(
   return {
     precoAtual: preco,
     descontoPercentual: Number.isFinite(desconto) ? desconto : 0,
+    nome: no.productName ?? null,
+    imageUrl: no.imageUrl ?? null,
   };
 }
 

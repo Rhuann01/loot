@@ -7,6 +7,7 @@ import {
   marcarEnvioAmbiguo,
   marcarFalhaEnvio,
   gravarSnapshotTentativa,
+  gravarAtividade,
   type TentativaEnvio,
 } from "../db/queries.js";
 import { executarEnvioProtegido } from "./dispatch.js";
@@ -118,6 +119,14 @@ export async function reenviarManualIdempotente(
           tentativa.id,
           true,
         );
+        gravarAtividade({
+          tipo: "recheca_descarte",
+          integracao_key: "shopee",
+          produto_id: produto.id,
+          tentativa_id: tentativa.id,
+          titulo: "Produto descartado pela recheca Shopee",
+          detalhe: decisao.motivo,
+        });
         return "failed";
       }
       descontoEnvio = decisao.descontoPercentual;
