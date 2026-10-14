@@ -40,3 +40,23 @@ export const coletores: ReadonlyArray<{
   { key: "mercado_livre", coletar: processarESalvarOfertas },
   { key: "shopee", coletar: coletarOfertasShopee },
 ];
+
+export type SincronizadorPlataforma = (key: string) => Promise<number>;
+
+let sincronizadorCustomizado: SincronizadorPlataforma | null = null;
+
+export function definirSincronizadorParaTeste(
+  fn: SincronizadorPlataforma | null,
+) {
+  sincronizadorCustomizado = fn;
+}
+
+export async function sincronizarPlataforma(key: string): Promise<number> {
+  if (sincronizadorCustomizado) {
+    return sincronizadorCustomizado(key);
+  }
+  const coletor = coletores.find((c) => c.key === key);
+  if (!coletor) throw new Error(`coletor não implementado para: ${key}`);
+  return coletor.coletar();
+}
+

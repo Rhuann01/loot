@@ -770,6 +770,135 @@ export function listarIntegracoes(): IntegrationView[] {
   }));
 }
 
+export interface PlatformState {
+  key: string;
+  nome: string;
+  status: string;
+  available: boolean;
+  ativo: boolean;
+  ultimaSincronizacao: string | null;
+  totalProdutos: number;
+  comissaoHoje: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: true;
+    motivo?: string | undefined;
+  };
+  erro: string | null;
+  motivo?: string | undefined;
+}
+
+export function obterEstadoPlataforma(key: string): PlatformState | null {
+  const row = db
+    .prepare(
+      `SELECT c.key, c.nome, c.available, s.active, s.status,
+              s.ultima_sincronizacao, s.last_checked_at, s.last_connected_at,
+              s.ultimo_erro, s.last_error
+       FROM integration_catalog c
+       JOIN store_integrations s ON s.integration_key = c.key
+       WHERE c.key = ?`,
+    )
+    .get(key) as
+    | {
+        key: string;
+        nome: string;
+        available: number;
+        active: number;
+        status: string;
+        ultima_sincronizacao: string | null;
+        last_checked_at: string | null;
+        last_connected_at: string | null;
+        ultimo_erro: string | null;
+        last_error: string | null;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  const totalProdutos = (
+    db
+      .prepare(`SELECT COUNT(*) as n FROM produtos WHERE source_key = ?`)
+      .get(row.key) as { n: number }
+  ).n;
+
+  let comissaoHoje: {
+    valor: number | null;
+    disponivel: boolean;
+    estimada: true;
+    motivo?: string | undefined;
+  };
+
+  if (row.key === "shopee") {
+    const resHoje = consultarComissaoDoDia("shopee");
+    comissaoHoje = {
+      valor: resHoje.valor,
+      disponivel: resHoje.disponivel,
+      estimada: true,
+    };
+  } else {
+    comissaoHoje = {
+      valor: null,
+      disponivel: false,
+      estimada: true,
+    };
+  }
+
+  const ultimaSincronizacao =
+    row.ultima_sincronizacao ?? row.last_checked_at ?? null;
+  const erro = row.ultimo_erro ?? row.last_error ?? null;
+  const available = Boolean(row.available);
+
+  return {
+    key: row.key,
+    nome: row.nome,
+    status: row.status,
+    available,
+    ativo: Boolean(row.active),
+    ultimaSincronizacao,
+    totalProdutos,
+    comissaoHoje,
+    erro,
+    ...(available ? {} : { motivo: "Não disponível nesta versão" }),
+  };
+}
+
+export function listarPlataformas(): PlatformState[] {
+  const catalog = db
+    .prepare(`SELECT key FROM integration_catalog ORDER BY key`)
+    .all() as Array<{ key: string }>;
+
+  return catalog
+    .map((c) => obterEstadoPlataforma(c.key))
+    .filter((p): p is PlatformState => p !== null);
+}
+
+export function atualizarSincronizacaoPlataforma(
+  key: string,
+  dados: {
+    status?: string | undefined;
+    ultimaSincronizacao?: string | null | undefined;
+    ultimoErro?: string | null | undefined;
+  },
+) {
+  db.prepare(
+    `UPDATE store_integrations
+     SET status = COALESCE(?, status),
+         ultima_sincronizacao = COALESCE(?, ultima_sincronizacao),
+         last_checked_at = COALESCE(?, last_checked_at),
+         ultimo_erro = ?,
+         last_error = ?,
+         atualizado_em = CURRENT_TIMESTAMP
+     WHERE integration_key = ?`,
+  ).run(
+    dados.status ?? null,
+    dados.ultimaSincronizacao ?? null,
+    dados.ultimaSincronizacao ?? null,
+    dados.ultimoErro ?? null,
+    dados.ultimoErro ?? null,
+    key,
+  );
+}
+
 export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
   const result = db
     .prepare(
@@ -789,6 +918,7 @@ export function atualizarAtivacaoIntegracao(key: string, active: boolean) {
     .run(active ? 1 : 0, active ? 1 : 0, active ? 1 : 0, key);
 
   if (result.changes === 0) throw new Error("integração não encontrada");
+  return obterEstadoPlataforma(key);
 }
 
 export function atualizarStatusIntegracao(

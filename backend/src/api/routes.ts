@@ -1,4 +1,5 @@
 import { Router, type RequestHandler } from "express";
+import { randomUUID } from "node:crypto";
 import { enviarErro, envelopeLista } from "./respostas.js";
 import {
   alternarSelecao,
@@ -12,12 +13,20 @@ import {
   obterUltimaComissao,
   listarAtividades,
   gravarAtividade,
+  obterEstadoPlataforma,
+  listarPlataformas,
+  atualizarSincronizacaoPlataforma,
+  atualizarStatusIntegracao,
+  adquirirLockExecucao,
+  liberarLockExecucao,
+  sanitizarTextoAtividade,
   ABAS_PRODUTOS,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
   type Produto,
 } from "../db/queries.js";
+import { sincronizarPlataforma } from "../integrations/registry.js";
 import {
   getQrCode,
   getStatusConexao,
@@ -452,6 +461,200 @@ router.put("/integrations/:key/active", (req, res) => {
     );
   }
 });
+
+function mascararAppId(appId: string | null | undefined): string | null {
+  if (!appId) return null;
+  const s = String(appId).trim();
+  if (s.length <= 4) return "****";
+  const prefixo = s.slice(0, 2);
+  const sufixo = s.slice(-2);
+  return `${prefixo}${"*".repeat(Math.max(2, s.length - 4))}${sufixo}`;
+}
+
+function mascararSecret(secret: string | null | undefined): string | null {
+  if (!secret) return null;
+  return "********";
+}
+
+router.get("/platforms", (_req, res) => {
+  res.json(listarPlataformas());
+});
+
+router.get("/platforms/:key", (req, res) => {
+  const plat = obterEstadoPlataforma(req.params.key);
+  if (!plat) {
+    return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
+  }
+  res.json(plat);
+});
+
+router.put("/platforms/:key/active", (req, res) => {
+  const activeRaw = req.body?.active ?? req.body?.ativo;
+  if (typeof activeRaw !== "boolean") {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "active deve ser booleano");
+  }
+
+  try {
+    const estado = atualizarAtivacaoIntegracao(req.params.key, activeRaw);
+    if (!estado) {
+      return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
+    }
+    res.json(estado);
+  } catch (erro) {
+    return enviarErro(
+      res,
+      404,
+      "PLATAFORMA_NAO_ENCONTRADA",
+      erro instanceof Error ? erro.message : String(erro),
+    );
+  }
+});
+
+router.post("/platforms/:key/sync", async (req, res) => {
+  const key = req.params.key;
+  const plat = obterEstadoPlataforma(key);
+  if (!plat) {
+    return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
+  }
+
+  if (!plat.available) {
+    return enviarErro(
+      res,
+      422,
+      "PLATAFORMA_INDISPONIVEL",
+      plat.motivo || "Não disponível nesta versão",
+    );
+  }
+
+  const lockName = `sync_${key}`;
+  const lockToken = randomUUID();
+  if (!adquirirLockExecucao(lockName, lockToken, 60_000)) {
+    return enviarErro(
+      res,
+      409,
+      "SINCRONIZACAO_EM_ANDAMENTO",
+      "sincronização já em andamento",
+    );
+  }
+
+  gravarAtividade({
+    tipo: "sincronizacao_inicio",
+    integracao_key: key,
+    titulo: `Sincronização iniciada: ${plat.nome}`,
+    detalhe: "Início da sincronização manual",
+  });
+
+  try {
+    const salvas = await sincronizarPlataforma(key);
+    const agoraIso = new Date().toISOString();
+    atualizarSincronizacaoPlataforma(key, {
+      status: "connected",
+      ultimaSincronizacao: agoraIso,
+      ultimoErro: null,
+    });
+    gravarAtividade({
+      tipo: "sincronizacao_sucesso",
+      integracao_key: key,
+      titulo: `Sincronização concluída: ${plat.nome}`,
+      detalhe: `${salvas} ofertas salvas`,
+    });
+    const atualizado = obterEstadoPlataforma(key);
+    res.json({ sucesso: true, ...atualizado });
+  } catch (erro) {
+    const mensagemRaw = erro instanceof Error ? erro.message : String(erro);
+    const mensagem = sanitizarTextoAtividade(mensagemRaw) ?? "Falha na sincronização";
+    atualizarSincronizacaoPlataforma(key, {
+      status: "disconnected",
+      ultimoErro: mensagem,
+    });
+    gravarAtividade({
+      tipo: "sincronizacao_falha",
+      integracao_key: key,
+      titulo: `Falha na sincronização: ${plat.nome}`,
+      detalhe: mensagem.slice(0, 200),
+    });
+    return enviarErro(
+      res,
+      502,
+      "SINCRONIZACAO_FALHOU",
+      `Falha na sincronização de ${plat.nome}: ${mensagem}`,
+    );
+  } finally {
+    liberarLockExecucao(lockName, lockToken);
+  }
+});
+
+router.get("/platforms/:key/config", (req, res) => {
+  const key = req.params.key;
+  if (key === "tiktok_shop") {
+    return enviarErro(res, 422, "PLATAFORMA_INDISPONIVEL", "Não disponível nesta versão");
+  }
+  if (key === "mercado_livre") {
+    return enviarErro(res, 400, "NAO_SUPORTADO", "Configuração manual não suportada para Mercado Livre");
+  }
+  if (key !== "shopee") {
+    return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
+  }
+
+  const appIdRaw = getConfig("shopee_app_id") || process.env.SHOPEE_APP_ID || null;
+  const secretRaw = getConfig("shopee_secret") || process.env.SHOPEE_SECRET || null;
+  const plat = obterEstadoPlataforma("shopee");
+
+  res.json({
+    key: "shopee",
+    nome: "Shopee",
+    appId: mascararAppId(appIdRaw),
+    apiKey: mascararSecret(secretRaw),
+    apiKeyConfigurada: Boolean(secretRaw),
+    status: plat?.status ?? "not_configured",
+    ultimaSincronizacao: plat?.ultimaSincronizacao ?? null,
+  });
+});
+
+router.put("/platforms/:key/config", (req, res) => {
+  const key = req.params.key;
+  if (key === "tiktok_shop") {
+    return enviarErro(res, 422, "PLATAFORMA_INDISPONIVEL", "Não disponível nesta versão");
+  }
+  if (key === "mercado_livre") {
+    return enviarErro(res, 400, "NAO_SUPORTADO", "Configuração manual não suportada para Mercado Livre");
+  }
+  if (key !== "shopee") {
+    return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
+  }
+
+  const { appId, apiKey, secret } = req.body as {
+    appId?: string | undefined;
+    apiKey?: string | undefined;
+    secret?: string | undefined;
+  };
+
+  if (appId !== undefined) {
+    setConfig("shopee_app_id", appId.trim());
+  }
+  const novoSecret = apiKey ?? secret;
+  if (novoSecret !== undefined) {
+    setConfig("shopee_secret", novoSecret.trim());
+  }
+
+  const appIdSalvo = getConfig("shopee_app_id") || process.env.SHOPEE_APP_ID || null;
+  const secretSalvo = getConfig("shopee_secret") || process.env.SHOPEE_SECRET || null;
+  if (appIdSalvo && secretSalvo) {
+    atualizarStatusIntegracao("shopee", "configured");
+  }
+
+  const plat = obterEstadoPlataforma("shopee");
+  res.json({
+    key: "shopee",
+    nome: "Shopee",
+    appId: mascararAppId(appIdSalvo),
+    apiKey: mascararSecret(secretSalvo),
+    apiKeyConfigurada: Boolean(secretSalvo),
+    status: plat?.status ?? "configured",
+    ultimaSincronizacao: plat?.ultimaSincronizacao ?? null,
+  });
+});
+
 
 router.get("/queue/summary", (_req, res) => {
   res.json(obterResumoFila());

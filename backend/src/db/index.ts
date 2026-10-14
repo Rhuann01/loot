@@ -20,6 +20,8 @@ db.exec(`
     last_connected_at TEXT,
     last_checked_at TEXT,
     last_error TEXT,
+    ultima_sincronizacao TEXT,
+    ultimo_erro TEXT,
     criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (integration_key) REFERENCES integration_catalog(key)
@@ -350,6 +352,19 @@ aplicarMigracao(3, "historico_comissao_atividades", () => {
     CREATE INDEX IF NOT EXISTS idx_atividades_integracao
       ON atividades(integracao_key);
   `);
+});
+
+aplicarMigracao(4, "plataformas_sincronizacao", () => {
+  const colunas = db
+    .prepare("PRAGMA table_info(store_integrations)")
+    .all() as Array<{ name: string }>;
+  const nomes = new Set(colunas.map((c) => c.name));
+  if (!nomes.has("ultima_sincronizacao")) {
+    db.exec("ALTER TABLE store_integrations ADD COLUMN ultima_sincronizacao TEXT");
+  }
+  if (!nomes.has("ultimo_erro")) {
+    db.exec("ALTER TABLE store_integrations ADD COLUMN ultimo_erro TEXT");
+  }
 });
 
 console.log(
