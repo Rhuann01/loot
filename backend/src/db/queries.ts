@@ -1265,10 +1265,14 @@ export function sanitizarTextoAtividade(
 ): string | null {
   if (!texto) return null;
   let limpo = texto;
+  limpo = limpo.replace(/basic\s+[a-z0-9+/=]+/gi, "Basic [redigido]");
+  limpo = limpo.replace(/bearer\s+[a-z0-9_.-]+/gi, "Bearer [redigido]");
   limpo = limpo.replace(/cookie[^\s,;]*/gi, "[redigido]");
   limpo = limpo.replace(/csrf[^\s,;]*/gi, "[redigido]");
   limpo = limpo.replace(/token[^\s,;]*/gi, "[redigido]");
   limpo = limpo.replace(/secret[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/senha[^\s,;]*/gi, "[redigido]");
+  limpo = limpo.replace(/password[^\s,;]*/gi, "[redigido]");
   return limpo.slice(0, 500);
 }
 

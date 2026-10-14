@@ -257,7 +257,7 @@ router.get("/produtos/:id", (req, res) => {
   });
 });
 
-router.get("/produtos/:id/tentativas", (req, res) => {
+router.get(["/produtos/:id/tentativas", "/produtos/:id/attempts"], (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     return enviarErro(
@@ -589,8 +589,13 @@ router.put("/platforms/:key/active", (req, res) => {
     return enviarErro(res, 400, "PARAMETRO_INVALIDO", "active deve ser booleano");
   }
 
+  const key = req.params.key;
+  if (key === "tiktok_shop") {
+    return enviarErro(res, 422, "PLATAFORMA_INDISPONIVEL", "Não disponível nesta versão");
+  }
+
   try {
-    const estado = atualizarAtivacaoIntegracao(req.params.key, activeRaw);
+    const estado = atualizarAtivacaoIntegracao(key, activeRaw);
     if (!estado) {
       return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
     }
