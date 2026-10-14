@@ -203,7 +203,30 @@ export function getSock(): WASocket | null {
   return sockAtual;
 }
 
+export type ListadorGruposWhatsApp = () => Promise<GrupoWhatsApp[]>;
+let listadorGruposCustom: ListadorGruposWhatsApp | null = null;
+export function definirListadorGruposParaTeste(fn: ListadorGruposWhatsApp | null) {
+  listadorGruposCustom = fn;
+}
+
+export type ConsultorStatusConexao = () => StatusConexao;
+let consultorStatusCustom: ConsultorStatusConexao | null = null;
+export function definirStatusConexaoParaTeste(fn: ConsultorStatusConexao | null) {
+  consultorStatusCustom = fn;
+}
+
+export function getNumeroConectado(): string | null {
+  if (sockAtual?.user?.id) {
+    const raw = sockAtual.user.id.split(":")[0]?.replace(/\D/g, "");
+    return raw || null;
+  }
+  return null;
+}
+
 export function getStatusConexao(): StatusConexao {
+  if (consultorStatusCustom) {
+    return consultorStatusCustom();
+  }
   return {
     estado: estadoConexao,
     conectado: estadoConexao === "conectado" && sockAtual !== null,
@@ -234,6 +257,9 @@ function grupoParaResposta(grupo: GroupMetadata): GrupoWhatsApp {
 }
 
 export async function listarGruposWhatsApp(): Promise<GrupoWhatsApp[]> {
+  if (listadorGruposCustom) {
+    return listadorGruposCustom();
+  }
   const sock = getSock();
   if (!sock || getStatusConexao().estado !== "conectado") {
     throw new Error("WhatsApp não está conectado");

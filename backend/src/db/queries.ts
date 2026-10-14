@@ -1652,4 +1652,9 @@ export function obterDadosDashboard(periodo: string = "7d"): DashboardData {
   };
 }
 
+export function contarTotalProdutos(): number {
+  const row = db.prepare(`SELECT COUNT(*) as n FROM produtos`).get() as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
 
