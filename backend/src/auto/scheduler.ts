@@ -282,10 +282,13 @@ function horarioParaCron(horario: string): string {
   return `${minuto} ${hora} * * *`;
 }
 
-function pararTarefas() {
+export function pararScheduler() {
   for (const tarefa of tarefas) tarefa.stop();
   tarefas = [];
 }
+
+const pararTarefas = pararScheduler;
+
 
 export function recarregarScheduler() {
   pararTarefas();

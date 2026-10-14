@@ -274,6 +274,7 @@ const defaults: Record<string, string> = {
   scraper_ultimo_erro: "",
   whatsapp_grupo_id: process.env.WHATSAPP_GROUP_ID ?? "",
   whatsapp_grupo_nome: "",
+  retencao_dias: "90",
 };
 
 const inserirDefault = db.prepare(`

@@ -25,11 +25,14 @@ import {
   buscarProdutoPorExternalId,
   listarEnviosPaginado,
   enviosHoje,
+  obterDadosDashboard,
+  contarTotalProdutos,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
   type Produto,
 } from "../db/queries.js";
+import { calcularProximoEnvio } from "../lib/time.js";
 import {
   normalizarUrlShopee,
   resolverLinkShopee,
@@ -44,6 +47,7 @@ import {
   inscreverMudancasConexao,
   listarGruposWhatsApp,
   solicitarReconexao,
+  getNumeroConectado,
 } from "../whatsapp/connection.js";
 import { getConfig, setConfig } from "../db/queries.js";
 import {
@@ -146,6 +150,21 @@ router.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+router.get("/dashboard", (req, res) => {
+  const period = req.query.period;
+  if (period !== undefined && period !== "7d") {
+    return enviarErro(
+      res,
+      400,
+      "PARAMETRO_INVALIDO",
+      "Período inválido. Período suportado: 7d",
+    );
+  }
+
+  const dados = obterDadosDashboard("7d");
+  res.json(dados);
+});
+
 router.get("/produtos", (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
 
@@ -238,7 +257,7 @@ router.get("/produtos/:id", (req, res) => {
   });
 });
 
-router.get("/produtos/:id/tentativas", (req, res) => {
+router.get(["/produtos/:id/tentativas", "/produtos/:id/attempts"], (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     return enviarErro(
@@ -426,6 +445,71 @@ router.delete("/whatsapp/group", (_req, res) => {
   res.json({ sucesso: true });
 });
 
+router.post("/whatsapp/test", async (_req, res) => {
+  const status = getStatusConexao();
+  if (!status.conectado) {
+    return enviarErro(res, 503, "WHATSAPP_OFFLINE", "WhatsApp não está conectado");
+  }
+
+  const destinoId = getConfig("whatsapp_grupo_id") || "";
+  const destinoNomeConfig = getConfig("whatsapp_grupo_nome") || "";
+
+  if (!destinoId) {
+    return res.json({
+      sucesso: false,
+      conectado: true,
+      grupoValido: false,
+      status: "aviso",
+      diagnostico: "WhatsApp conectado, mas nenhum grupo de destino está configurado.",
+      destino: null,
+    });
+  }
+
+  try {
+    const grupos = await listarGruposWhatsApp();
+    const grupoEncontrado = grupos.find((g) => g.id === destinoId);
+
+    if (!grupoEncontrado) {
+      return res.json({
+        sucesso: false,
+        conectado: true,
+        grupoValido: false,
+        status: "aviso",
+        diagnostico: `WhatsApp conectado, mas o grupo configurado (${destinoNomeConfig || destinoId}) não foi encontrado na conta.`,
+        destino: {
+          id: destinoId,
+          nome: destinoNomeConfig || null,
+        },
+      });
+    }
+
+    return res.json({
+      sucesso: true,
+      conectado: true,
+      grupoValido: true,
+      status: "ok",
+      diagnostico: `WhatsApp conectado e grupo de destino "${grupoEncontrado.nome}" verificado com sucesso.`,
+      destino: {
+        id: grupoEncontrado.id,
+        nome: grupoEncontrado.nome,
+      },
+    });
+  } catch (erro) {
+    return res.json({
+      sucesso: false,
+      conectado: true,
+      grupoValido: false,
+      status: "erro",
+      diagnostico: `Erro ao verificar grupos do WhatsApp: ${erro instanceof Error ? erro.message : String(erro)}`,
+      destino: {
+        id: destinoId,
+        nome: destinoNomeConfig || null,
+      },
+    });
+  }
+});
+
+
 router.get("/config", (req, res) => {
   const config = {
     auto_envio_ativo: getConfig("auto_envio_ativo"),
@@ -505,8 +589,13 @@ router.put("/platforms/:key/active", (req, res) => {
     return enviarErro(res, 400, "PARAMETRO_INVALIDO", "active deve ser booleano");
   }
 
+  const key = req.params.key;
+  if (key === "tiktok_shop") {
+    return enviarErro(res, 422, "PLATAFORMA_INDISPONIVEL", "Não disponível nesta versão");
+  }
+
   try {
-    const estado = atualizarAtivacaoIntegracao(req.params.key, activeRaw);
+    const estado = atualizarAtivacaoIntegracao(key, activeRaw);
     if (!estado) {
       return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
     }
@@ -749,6 +838,227 @@ router.put("/scheduler", (req, res) => {
   res.json(config);
 });
 
+router.get("/settings", async (_req, res) => {
+  const config = obterConfigScheduler();
+  const statusConexao = getStatusConexao();
+  const destinoId = getConfig("whatsapp_grupo_id") || null;
+  const destinoNome = getConfig("whatsapp_grupo_nome") || null;
+  const janelaShopeeRaw = getConfig("janela_shopee_horas");
+  const janelaShopee = janelaShopeeRaw ? Number(janelaShopeeRaw) : 12;
+
+  let grupos: Array<{ id: string; nome: string }> = [];
+  if (statusConexao.conectado) {
+    try {
+      const lista = await listarGruposWhatsApp();
+      grupos = lista.map((g) => ({ id: g.id, nome: g.nome }));
+    } catch {
+      grupos = [];
+    }
+  }
+
+  res.json({
+    scheduler: {
+      ativo: config.ativo,
+      horarios: config.horarios,
+      limiteDiario: config.limite_diario,
+      quantidadePorExecucao: config.quantidade_por_execucao,
+      intervaloEntreMensagensMs: config.intervalo_entre_mensagens_ms,
+      proximoEnvio: calcularProximoEnvio(config.horarios, config.ativo),
+      janelaShopeeHoras: Number.isInteger(janelaShopee) && janelaShopee >= 1 ? janelaShopee : 12,
+    },
+    whatsapp: {
+      status: statusConexao.conectado ? "connected" : "disconnected",
+      numero: statusConexao.conectado ? getNumeroConectado() : null,
+      destino: destinoId ? { id: destinoId, nome: destinoNome } : null,
+      grupos,
+    },
+    storage: {
+      tipo: "sqlite",
+      totalPromocoes: contarTotalProdutos(),
+    },
+  });
+});
+
+router.put("/settings", (req, res) => {
+  const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+
+  const proibidos = [
+    "cookie",
+    "cookies",
+    "csrf",
+    "token",
+    "secret",
+    "shopee_secret",
+    "shopee_app_id",
+    "app_id",
+    "comissao",
+    "comissao_valor",
+    "tiktok",
+    "tiktok_shop",
+    "sessao",
+    "session",
+    "backup",
+    "restauracao",
+    "restore",
+    "credentials",
+    "credenciais",
+    "senha",
+    "password",
+  ];
+
+  const checarProibidos = (obj: Record<string, unknown>) => {
+    for (const chave of Object.keys(obj)) {
+      const normalizada = chave.toLowerCase();
+      if (proibidos.some((p) => normalizada.includes(p))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (checarProibidos(body)) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "Parâmetro não permitido em configurações");
+  }
+
+  const schedulerInput = (
+    body.scheduler && typeof body.scheduler === "object"
+      ? (body.scheduler as Record<string, unknown>)
+      : body
+  ) as Record<string, unknown>;
+
+  if (checarProibidos(schedulerInput)) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "Parâmetro não permitido em configurações");
+  }
+
+  const configAtual = obterConfigScheduler();
+
+  // 1. ativo
+  const ativoRaw = schedulerInput.ativo ?? schedulerInput.auto_envio_ativo;
+  let ativo = configAtual.ativo;
+  if (ativoRaw !== undefined) {
+    if (typeof ativoRaw !== "boolean") {
+      return enviarErro(res, 400, "PARAMETRO_INVALIDO", "ativo deve ser booleano");
+    }
+    ativo = ativoRaw;
+  }
+
+  // 2. horarios
+  const horariosRaw = schedulerInput.horarios;
+  let horarios = configAtual.horarios;
+  if (horariosRaw !== undefined) {
+    if (
+      !Array.isArray(horariosRaw) ||
+      horariosRaw.length > MAX_HORARIOS_SCHEDULER ||
+      !horariosRaw.every(
+        (h) => typeof h === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(h),
+      )
+    ) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        `horarios deve conter no máximo ${MAX_HORARIOS_SCHEDULER} horários no formato HH:mm`,
+      );
+    }
+    horarios = [...new Set(horariosRaw)].sort();
+  }
+
+  // 3. limite diário
+  const limiteRaw = schedulerInput.limiteDiario ?? schedulerInput.limite_diario;
+  let limite = configAtual.limite_diario;
+  if (limiteRaw !== undefined) {
+    const l = Number(limiteRaw);
+    if (!Number.isInteger(l) || l < 1 || l > 100) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "limiteDiario deve ser um inteiro entre 1 e 100",
+      );
+    }
+    limite = l;
+  }
+
+  // 4. quantidade por execução
+  const qtdRaw =
+    schedulerInput.quantidadePorExecucao ?? schedulerInput.quantidade_por_execucao;
+  let qtd = configAtual.quantidade_por_execucao;
+  if (qtdRaw !== undefined) {
+    const q = Number(qtdRaw);
+    if (!Number.isInteger(q) || q < 1) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "quantidadePorExecucao deve ser um inteiro positivo",
+      );
+    }
+    qtd = q;
+  }
+
+  // 5. intervalo entre mensagens
+  const intervaloRaw =
+    schedulerInput.intervaloEntreMensagensMs ??
+    schedulerInput.intervalo_entre_mensagens_ms;
+  let intervalo = configAtual.intervalo_entre_mensagens_ms;
+  if (intervaloRaw !== undefined) {
+    const i = Number(intervaloRaw);
+    if (!Number.isInteger(i) || i < 0 || i > 600_000) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "intervaloEntreMensagensMs deve ser um inteiro entre 0 e 600000",
+      );
+    }
+    intervalo = i;
+  }
+
+  // 6. janela shopee horas
+  const janelaRaw =
+    schedulerInput.janelaShopeeHoras ?? schedulerInput.janela_shopee_horas;
+  let janela = getConfig("janela_shopee_horas")
+    ? Number(getConfig("janela_shopee_horas"))
+    : 12;
+  if (janelaRaw !== undefined) {
+    const j = Number(janelaRaw);
+    if (!Number.isInteger(j) || j < 1 || j > 168) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "janelaShopeeHoras deve ser um inteiro entre 1 e 168",
+      );
+    }
+    janela = j;
+    setConfig("janela_shopee_horas", String(janela));
+  }
+
+  const novaConfig: ConfigScheduler = {
+    ativo,
+    horarios,
+    limite_diario: limite,
+    quantidade_por_execucao: qtd,
+    intervalo_entre_mensagens_ms: intervalo,
+  };
+
+  salvarConfigScheduler(novaConfig);
+
+  res.json({
+    sucesso: true,
+    scheduler: {
+      ativo: novaConfig.ativo,
+      horarios: novaConfig.horarios,
+      limiteDiario: novaConfig.limite_diario,
+      quantidadePorExecucao: novaConfig.quantidade_por_execucao,
+      intervaloEntreMensagensMs: novaConfig.intervalo_entre_mensagens_ms,
+      proximoEnvio: calcularProximoEnvio(novaConfig.horarios, novaConfig.ativo),
+      janelaShopeeHoras: janela,
+    },
+  });
+});
+
+
 router.post("/produtos/:id/selecionar", (req, res) => {
   const id = Number(req.params.id);
   const { selecionado } = req.body;
@@ -804,20 +1114,6 @@ router.post("/produtos/:id/reenviar", async (req, res) => {
 });
 
 // ---------- Envios e Envio Manual Shopee ----------
-
-function calcularProximoEnvio(horarios: string[], ativo: boolean): string | null {
-  if (!ativo || horarios.length === 0) return null;
-  const agora = new Date();
-  const brasiliaStr = agora.toLocaleTimeString("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const ordenados = [...horarios].sort();
-  const futuro = ordenados.find((h) => h > brasiliaStr);
-  return futuro ?? ordenados[0] ?? null;
-}
 
 router.post("/sends/manual/resolve", async (req, res) => {
   const url = req.body?.url;
