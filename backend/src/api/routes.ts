@@ -1,11 +1,19 @@
 import { Router, type RequestHandler } from "express";
-import { enviarErro } from "./respostas.js";
+import { enviarErro, envelopeLista } from "./respostas.js";
 import {
   alternarSelecao,
   listarProdutos,
   listarIntegracoes,
   atualizarAtivacaoIntegracao,
   obterResumoFila,
+  listarProdutosPaginado,
+  buscarProdutoComPlataforma,
+  listarTentativasEnvio,
+  ABAS_PRODUTOS,
+  type AbaProdutos,
+  type ProdutoComPlataforma,
+  type TentativaEnvio,
+  type Produto,
 } from "../db/queries.js";
 import {
   getQrCode,
@@ -31,6 +39,49 @@ import {
   gerarLinkAfiliado,
   SessionExpiredError,
 } from "../affiliate/mercadolivre/provider.js";
+
+function statusApresentacao(p: Produto): string {
+  if (p.enviado === 1 || p.status_fila === "sent") return "sent";
+  if (p.status_fila === "ambiguous") return "needs_review";
+  if (p.status_fila === "failed") return "failed";
+  return "pending";
+}
+
+function produtoParaResposta(p: ProdutoComPlataforma) {
+  return {
+    id: p.id,
+    plataforma: { key: p.source_key, nome: p.plataforma_nome },
+    nome: p.nome,
+    precoAtual: p.preco_atual,
+    precoOriginal: p.preco_original,
+    descontoPercentual: p.desconto_percentual,
+    imagemUrl: p.imagem_url,
+    linkOriginal: p.link_original,
+    linkAfiliado: p.link_afiliado,
+    linkAfiliadoValido:
+      Boolean(p.link_afiliado.trim()) && p.link_afiliado !== p.link_original,
+    status: statusApresentacao(p),
+    needsReview: p.status_fila === "ambiguous",
+    emAndamento: p.status_fila === "sending",
+    selecionado: p.selecionado === 1,
+    tentativas: p.tentativas_envio,
+    ultimoErro: p.ultimo_erro_envio,
+    ofertaExpiraEm: p.oferta_expira_em,
+    criadoEm: p.criado_em,
+  };
+}
+
+function tentativaParaResposta(t: TentativaEnvio) {
+  return {
+    id: t.id,
+    origem: t.origem === "automatico" ? "auto" : t.origem,
+    status: t.status,
+    needsReview: t.status === "ambiguous",
+    motivo: t.motivo,
+    iniciadoEm: t.iniciado_em,
+    finalizadoEm: t.finalizado_em,
+  };
+}
 
 const router = Router();
 
@@ -66,8 +117,100 @@ router.get("/health", (req, res) => {
 });
 
 router.get("/produtos", (req, res) => {
-  const produtos = listarProdutos();
-  res.json(produtos);
+  const q = typeof req.query.q === "string" ? req.query.q : undefined;
+
+  const statusRaw =
+    req.query.status !== undefined ? String(req.query.status) : "all";
+  if (!ABAS_PRODUTOS.includes(statusRaw as AbaProdutos)) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "status inválido");
+  }
+  const aba = statusRaw as AbaProdutos;
+
+  let page = 1;
+  if (req.query.page !== undefined) {
+    const p = Number(req.query.page);
+    if (!Number.isInteger(p) || p < 1) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "page deve ser um inteiro >= 1",
+      );
+    }
+    page = p;
+  }
+
+  let limit = 20;
+  if (req.query.limit !== undefined) {
+    const l = Number(req.query.limit);
+    if (!Number.isInteger(l) || l < 1 || l > 100) {
+      return enviarErro(
+        res,
+        400,
+        "PARAMETRO_INVALIDO",
+        "limit deve ser um inteiro entre 1 e 100",
+      );
+    }
+    limit = l;
+  }
+
+  const { items, total, contagens } = listarProdutosPaginado({
+    q,
+    aba,
+    page,
+    limit,
+  });
+  res.json(
+    envelopeLista(items.map(produtoParaResposta), page, limit, total, {
+      counts: contagens,
+    }),
+  );
+});
+
+router.get("/produtos/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return enviarErro(
+      res,
+      400,
+      "PARAMETRO_INVALIDO",
+      "id deve ser um inteiro positivo",
+    );
+  }
+
+  const p = buscarProdutoComPlataforma(id);
+  if (!p) {
+    return enviarErro(res, 404, "NAO_ENCONTRADO", "produto não encontrado");
+  }
+
+  res.json({
+    ...produtoParaResposta(p),
+    comissao: { valor: null, disponivel: false },
+    pedidos: { disponivel: false, motivo: "fonte de dados não confirmada" },
+    tentativas: listarTentativasEnvio(id).map(tentativaParaResposta),
+  });
+});
+
+router.get("/produtos/:id/tentativas", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return enviarErro(
+      res,
+      400,
+      "PARAMETRO_INVALIDO",
+      "id deve ser um inteiro positivo",
+    );
+  }
+
+  const p = buscarProdutoComPlataforma(id);
+  if (!p) {
+    return enviarErro(res, 404, "NAO_ENCONTRADO", "produto não encontrado");
+  }
+
+  const tentativas = listarTentativasEnvio(id).map(tentativaParaResposta);
+  res.json(
+    envelopeLista(tentativas, 1, tentativas.length || 1, tentativas.length),
+  );
 });
 
 router.get("/whatsapp/status", (req, res) => {
@@ -337,12 +480,18 @@ router.post("/produtos/:id/reenviar", async (req, res) => {
     if (resultado === "ausente") {
       return enviarErro(res, status, "NAO_ENCONTRADO", "produto não encontrado");
     }
+
+    const produtoAtualizado = buscarProdutoComPlataforma(id);
+    const mensagemErro =
+      produtoAtualizado?.ultimo_erro_envio ||
+      "não foi possível confirmar o envio manual";
+
     return enviarErro(
       res,
       status,
-      "ERRO_INTERNO",
-      "não foi possível confirmar o envio manual",
-      { status: resultado },
+      resultado === "failed" ? "REENVIO_FALHOU" : "REENVIO_AMBIGUO",
+      mensagemErro,
+      { status: resultado, needsReview: resultado === "ambiguous" },
     );
   } catch {
     enviarErro(res, 502, "ERRO_INTERNO", "não foi possível confirmar o envio manual");

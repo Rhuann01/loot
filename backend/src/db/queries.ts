@@ -828,3 +828,51 @@ export function atualizarCookieSessao(provedor: string, cookie: string) {
   `,
   ).run(cookie, provedor);
 }
+
+export type AbaProdutos = "all" | "pending" | "sent" | "failed" | "ambiguous" | "not_sent";
+export const ABAS_PRODUTOS: readonly AbaProdutos[] = ["all","pending","sent","failed","ambiguous","not_sent"];
+
+const CONDICAO_ABA: Record<AbaProdutos, string> = {
+  all: "1 = 1",
+  pending: "p.enviado = 0 AND p.status_fila IN ('pending','sending')",
+  sent: "(p.status_fila = 'sent' OR p.enviado = 1)",
+  failed: "p.status_fila = 'failed' AND p.enviado = 0",
+  ambiguous: "p.status_fila = 'ambiguous' AND p.enviado = 0",
+  not_sent: "p.enviado = 0",
+};
+
+export interface ProdutoComPlataforma extends Produto { plataforma_nome: string }
+
+function filtroBusca(q: string | undefined) {
+  const termo = q?.trim();
+  if (!termo) return { sql: "", params: [] as string[] };
+  const escapado = termo.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return { sql: " AND p.nome LIKE ? ESCAPE '\\'", params: [`%${escapado}%`] };
+}
+
+export function listarProdutosPaginado(opcoes: { q?: string | undefined; aba: AbaProdutos; page: number; limit: number }) {
+  const busca = filtroBusca(opcoes.q);
+  const where = `${CONDICAO_ABA[opcoes.aba]}${busca.sql}`;
+  const items = db.prepare(
+    `SELECT p.*, COALESCE(c.nome, p.source_key) AS plataforma_nome
+     FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key
+     WHERE ${where}
+     ORDER BY datetime(p.criado_em) DESC, p.id DESC
+     LIMIT ? OFFSET ?`,
+  ).all(...busca.params, opcoes.limit, (opcoes.page - 1) * opcoes.limit) as ProdutoComPlataforma[];
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM produtos p WHERE ${where}`).get(...busca.params) as { n: number }).n;
+  const contagens = {} as Record<AbaProdutos, number>;
+  for (const aba of ABAS_PRODUTOS) {
+    contagens[aba] = (db.prepare(
+      `SELECT COUNT(*) AS n FROM produtos p WHERE ${CONDICAO_ABA[aba]}${busca.sql}`,
+    ).get(...busca.params) as { n: number }).n;
+  }
+  return { items, total, contagens };
+}
+
+export function buscarProdutoComPlataforma(id: number): ProdutoComPlataforma | undefined {
+  return db.prepare(
+    `SELECT p.*, COALESCE(c.nome, p.source_key) AS plataforma_nome
+     FROM produtos p LEFT JOIN integration_catalog c ON c.key = p.source_key WHERE p.id = ?`,
+  ).get(id) as ProdutoComPlataforma | undefined;
+}
