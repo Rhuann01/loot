@@ -1160,6 +1160,93 @@ try {
     assert.equal(buscarProdutoPorId(idMl)?.status_fila, "sent");
   }
 
+  // ---- Recheca no reenvio manual (Shopee) ----
+  limparBanco();
+  {
+    const idOk = criarProdutoShopee(
+      "20_20",
+      "https://shopee.com.br/product/20/20",
+      "https://s.shopee.com.br/abc20",
+    );
+    const enviadosManual: string[] = [];
+    assert.equal(
+      await reenviarManualIdempotente(
+        idOk,
+        "manual-shopee-preco-caiu",
+        async (p) => {
+          enviadosManual.push(p.preco_atual);
+        },
+        async () => ({ precoAtual: 64, descontoPercentual: 60 }),
+      ),
+      "sent",
+    );
+    assert.deepEqual(enviadosManual, ["64,00"]);
+    assert.equal(buscarProdutoPorId(idOk)?.preco_atual, "64,00");
+
+    const idSobe = criarProdutoShopee(
+      "21_21",
+      "https://shopee.com.br/product/21/21",
+      "https://s.shopee.com.br/abc21",
+    );
+    let enviosSobe = 0;
+    assert.equal(
+      await reenviarManualIdempotente(
+        idSobe,
+        "manual-shopee-preco-subiu",
+        async () => {
+          enviosSobe += 1;
+        },
+        async () => ({ precoAtual: 95, descontoPercentual: 40 }),
+      ),
+      "failed",
+    );
+    assert.equal(enviosSobe, 0);
+    assert.match(buscarProdutoPorId(idSobe)?.ultimo_erro_envio ?? "", /Preço subiu/);
+
+    const idFora = criarProdutoShopee(
+      "22_22",
+      "https://shopee.com.br/product/22/22",
+      "https://s.shopee.com.br/abc22",
+    );
+    let enviosFora = 0;
+    assert.equal(
+      await reenviarManualIdempotente(
+        idFora,
+        "manual-shopee-api-fora",
+        async () => {
+          enviosFora += 1;
+        },
+        async () => {
+          throw new Error("rede caiu");
+        },
+      ),
+      "failed",
+    );
+    assert.equal(enviosFora, 0);
+    assert.match(
+      buscarProdutoPorId(idFora)?.ultimo_erro_envio ?? "",
+      /Não foi possível conferir o preço/,
+    );
+    assert.equal(listarTentativasEnvio(idFora)[0]?.status, "failed");
+
+    const idMl = criarProdutoComLinks(
+      "MLB-MANUAL-SEM-RECHECA",
+      "https://example.test/original-ml-manual",
+      "https://example.test/afiliado-ml-manual",
+    );
+    assert.equal(
+      await reenviarManualIdempotente(
+        idMl,
+        "manual-ml-sem-recheca",
+        async () => {},
+        async () => {
+          throw new Error("ML não deve consultar a Shopee");
+        },
+      ),
+      "sent",
+    );
+  }
+
   console.log("Resultado: envios confiáveis passou");
 } finally {
   db.close();

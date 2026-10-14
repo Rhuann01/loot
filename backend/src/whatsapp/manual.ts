@@ -1,5 +1,7 @@
 import {
+  atualizarPrecoProduto,
   buscarTentativaEnvioPorId,
+  getConfig,
   iniciarEnvioManualIdempotente,
   marcarComoEnviado,
   marcarEnvioAmbiguo,
@@ -9,6 +11,12 @@ import {
 import { executarEnvioProtegido } from "./dispatch.js";
 import { enviarProduto } from "./sender.js";
 import { temAffiliateProvider } from "../integrations/registry.js";
+import {
+  consultarOfertaShopeePorItem,
+  decidirRecheca,
+  extrairItemIdShopee,
+  precosDaOfertaAtual,
+} from "../integrations/shopee/source.js";
 
 export type ResultadoReenvioManual =
   | "sent"
@@ -38,10 +46,18 @@ function resultadoDaTentativa(tentativa: TentativaEnvio): ResultadoReenvioManual
   return tentativa.status === "cancelled" ? "ambiguous" : tentativa.status;
 }
 
+export type ResultadoRechecaManual = Awaited<
+  ReturnType<typeof consultarOfertaShopeePorItem>
+>;
+export type ConsultaPrecoManual = (
+  itemId: string,
+) => Promise<ResultadoRechecaManual>;
+
 export async function reenviarManualIdempotente(
   produtoId: number,
   chave: string,
   enviar: typeof enviarProduto = enviarProduto,
+  consultarPreco: ConsultaPrecoManual = consultarOfertaShopeePorItem,
 ): Promise<ResultadoReenvioManual> {
   const inicio = iniciarEnvioManualIdempotente(produtoId, chave);
   if (inicio.tipo === "conflito" || inicio.tipo === "ausente") return inicio.tipo;
@@ -66,12 +82,59 @@ export async function reenviarManualIdempotente(
       return "failed";
     }
 
+    let precoAtualEnvio = produto.preco_atual;
+    let precoOriginalEnvio = produto.preco_original;
+
+    if (produto.source_key === "shopee") {
+      const itemId = extrairItemIdShopee(produto.external_product_id);
+      let atual: ResultadoRechecaManual;
+      try {
+        if (!itemId) throw new Error("Identificador Shopee inválido");
+        atual = await consultarPreco(itemId);
+      } catch (erro) {
+        marcarFalhaEnvio(
+          produto.id,
+          `Não foi possível conferir o preço agora: ${
+            erro instanceof Error ? erro.message : String(erro)
+          }`,
+          tentativa.id,
+          true,
+        );
+        return "failed";
+      }
+
+      const descontoMinimo = Math.max(
+        0,
+        Number(getConfig("desconto_minimo_global") ?? 20) || 0,
+      );
+      const decisao = decidirRecheca(produto.preco_atual, atual, descontoMinimo);
+      if (!decisao.enviar) {
+        if (atual) atualizarPrecoProduto(produto.id, precosDaOfertaAtual(atual));
+        marcarFalhaEnvio(
+          produto.id,
+          `Recheca Shopee: ${decisao.motivo}`,
+          tentativa.id,
+          true,
+        );
+        return "failed";
+      }
+      const novos = precosDaOfertaAtual({
+        precoAtual: decisao.precoAtual,
+        descontoPercentual: decisao.descontoPercentual,
+      });
+      if (novos.preco_atual !== produto.preco_atual) {
+        atualizarPrecoProduto(produto.id, novos);
+        precoAtualEnvio = novos.preco_atual;
+        precoOriginalEnvio = novos.preco_original;
+      }
+    }
+
     try {
       await aguardarIntervaloAntesDaMensagem();
       await enviar({
         nome: produto.nome,
-        preco_atual: produto.preco_atual,
-        preco_original: produto.preco_original,
+        preco_atual: precoAtualEnvio,
+        preco_original: precoOriginalEnvio,
         link_afiliado: produto.link_afiliado,
         imagem_url: produto.imagem_url,
       });

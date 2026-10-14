@@ -292,8 +292,11 @@ export function recarregarScheduler() {
 
           // A coleta atualiza o estoque, mas não pode impedir os envios.
           // Cada loja é independente: a falha de uma não bloqueia a outra.
-          if (indice === 0) {
+          // Shopee coleta em todos os horários (preço fresco, 2 requisições);
+          // as demais lojas (custo de Apify) coletam só no primeiro horário.
+          {
             for (const { key, coletar } of coletores) {
+              if (key !== "shopee" && indice !== 0) continue;
               if (!integracaoEstaAtiva(key)) {
                 console.log(
                   `scheduler: coleta de ${key} ignorada porque a integração está desativada`,
