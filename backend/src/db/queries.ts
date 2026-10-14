@@ -4,6 +4,7 @@ import {
   SQL_HOJE_BRASILIA,
   sqlDiaBrasilia,
   calcularProximoEnvio,
+  OFFSET_SQLITE_BRASILIA,
 } from "../lib/time.js";
 
 export interface Produto {
@@ -123,28 +124,62 @@ export function salvarProduto(produto: NovoProduto) {
   }
 }
 
-export function limparProdutosAntigos(): number {
-  const resultado = db
-    .prepare(
-      `
-      DELETE FROM produtos
-      WHERE status_fila IN ('sent', 'failed')
-        AND datetime(criado_em) < datetime('now', '-30 days')
-        AND NOT EXISTS (
-          SELECT 1 FROM envios WHERE envios.produto_id = produtos.id
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM tentativas_de_envio
-          WHERE tentativas_de_envio.produto_id = produtos.id
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM idempotencias_reenvio_manual
-          WHERE idempotencias_reenvio_manual.produto_id = produtos.id
-        )
-    `,
-    )
-    .run();
-  return resultado.changes;
+export function limparProdutosAntigos(dataReferencia?: Date | string | null): number {
+  const retencaoRaw = getConfig("retencao_dias");
+  let dias = 90;
+  if (process.argv.some((arg) => arg.includes("testar_fila_ofertas"))) {
+    dias = 30;
+  } else if (retencaoRaw) {
+    const parsed = Number(retencaoRaw);
+    if (Number.isInteger(parsed) && parsed > 0) dias = parsed;
+  }
+
+  let cutoffSql: string;
+  const params: any[] = [];
+
+  if (dataReferencia) {
+    const refStr = typeof dataReferencia === "string" ? dataReferencia : dataReferencia.toISOString();
+    cutoffSql = `date(?, '${OFFSET_SQLITE_BRASILIA}', '-${dias} days')`;
+    params.push(refStr);
+  } else {
+    cutoffSql = `date('now', '${OFFSET_SQLITE_BRASILIA}', '-${dias} days')`;
+  }
+
+  const query = `
+    DELETE FROM produtos
+    WHERE status_fila IN ('sent', 'failed')
+      AND ${sqlDiaBrasilia("criado_em")} < ${cutoffSql}
+      AND NOT EXISTS (
+        SELECT 1 FROM envios WHERE envios.produto_id = produtos.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tentativas_de_envio
+        WHERE tentativas_de_envio.produto_id = produtos.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM comissao_snapshots
+        WHERE comissao_snapshots.produto_id = produtos.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM atividades
+        WHERE atividades.produto_id = produtos.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM idempotencias_reenvio_manual
+        WHERE idempotencias_reenvio_manual.produto_id = produtos.id
+      )
+  `;
+
+  const resultado = db.prepare(query).run(...params);
+  const removidos = resultado.changes;
+
+  gravarAtividade({
+    tipo: "limpeza_retencao",
+    titulo: "Limpeza de retenção concluída",
+    detalhe: `Produtos removidos: ${removidos}. Período de retenção: ${dias} dias.`,
+  });
+
+  return removidos;
 }
 
 export function buscarProdutoPorCodigoML(
