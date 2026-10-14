@@ -119,6 +119,8 @@ export async function enviarLote(
         // NOVO: recheca de preço (somente Shopee)
         let precoAtualEnvio = produto.preco_atual;
         let precoOriginalEnvio = produto.preco_original;
+        let descontoEnvio: number | null | undefined =
+          produto.desconto_percentual;
 
         if (produto.source_key === "shopee") {
           let resultadoRecheca: ResultadoRecheca;
@@ -156,6 +158,7 @@ export async function enviarLote(
             return "descartado";
           }
 
+          descontoEnvio = decisao.descontoPercentual;
           const novos = precosDaOfertaAtual({
             precoAtual: decisao.precoAtual,
             descontoPercentual: decisao.descontoPercentual,
@@ -172,6 +175,7 @@ export async function enviarLote(
           nome: produto.nome,
           preco_atual: precoAtualEnvio,
           preco_original: precoOriginalEnvio,
+          descontoPercentual: descontoEnvio,
           link_afiliado: linkAfiliado,
           imagem_url: produto.imagem_url,
         });

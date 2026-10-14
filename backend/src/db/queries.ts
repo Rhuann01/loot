@@ -42,7 +42,7 @@ interface NovoProduto {
   external_product_id: string;
   nome: string;
   preco_atual: string;
-  preco_original?: string;
+  preco_original?: string | null;
   desconto_percentual?: number;
   imagem_url?: string;
   link_original?: string;
@@ -424,7 +424,7 @@ export function atualizarPrecoProduto(
   produtoId: number,
   precos: {
     preco_atual: string;
-    preco_original: string;
+    preco_original: string | null;
     desconto_percentual: number;
   },
 ) {

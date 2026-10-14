@@ -967,7 +967,7 @@ try {
       },
       rechecaOk(64, 60),
     );
-    assert.deepEqual(enviados, [{ atual: "64,00", original: "160,00" }]);
+    assert.deepEqual(enviados, [{ atual: "64,00", original: null }]);
     const p = buscarProdutoPorId(id);
     assert.equal(p?.preco_atual, "64,00");
     assert.equal(p?.desconto_percentual, 60);
