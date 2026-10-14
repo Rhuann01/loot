@@ -239,6 +239,49 @@ try {
   assert.equal(jsonReenviar.error.code, "REENVIO_FALHOU");
   assert.match(jsonReenviar.error.message, /link afiliado/i);
 
+  // (10) Tentativa COM snapshot e SEM snapshot no GET /api/produtos/:id
+  {
+    const idSnap = ids[0]!;
+    api.db
+      .prepare(
+        `INSERT INTO tentativas_de_envio (produto_id, origem, status, mensagem_snapshot, destino_id, destino_nome, plataforma, titulo)
+         VALUES (?, 'auto', 'sent', 'Mensagem snapshot gravada', '123@g.us', 'Grupo Teste', 'mercado_livre', 'Produto Teste')`,
+      )
+      .run(idSnap);
+
+    api.db
+      .prepare(
+        `INSERT INTO tentativas_de_envio (produto_id, origem, status)
+         VALUES (?, 'automatico', 'failed')`,
+      )
+      .run(idSnap);
+
+    const resDetalheSnap = await api.req(`/api/produtos/${idSnap}`);
+    assert.equal(resDetalheSnap.status, 200);
+    const jsonTentativas = (
+      resDetalheSnap.json as {
+        tentativas: Array<{
+          origem: string;
+          mensagem: { disponivel: boolean; texto: string | null };
+          destino: { id: string | null; nome: string | null };
+          plataforma: string | null;
+          titulo: string | null;
+        }>;
+      }
+    ).tentativas;
+
+    const comSnap = jsonTentativas.find((t) => t.mensagem.disponivel);
+    const semSnap = jsonTentativas.find((t) => !t.mensagem.disponivel);
+
+    assert.ok(comSnap);
+    assert.equal(comSnap.mensagem.disponivel, true);
+    assert.equal(comSnap.mensagem.texto, "Mensagem snapshot gravada");
+    assert.ok(semSnap);
+    assert.equal(semSnap.mensagem.disponivel, false);
+    assert.equal(semSnap.mensagem.texto, null);
+    assert.equal(semSnap.origem, "auto");
+  }
+
   console.log("Resultado: api promocoes passou");
 } finally {
   await api.encerrar();

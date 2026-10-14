@@ -16,6 +16,7 @@ import {
   atualizarPrecoProduto,
   esgotarTentativasProduto,
   cancelarReservaSemConsumirTentativa,
+  gravarSnapshotTentativa,
 } from "../db/queries.js";
 import {
   consultarOfertaShopeePorItem,
@@ -25,7 +26,7 @@ import {
   type DecisaoRecheca,
   type OfertaAtualShopee,
 } from "../integrations/shopee/source.js";
-import { enviarProduto } from "../whatsapp/sender.js";
+import { enviarProduto, montarMensagemDoProduto } from "../whatsapp/sender.js";
 import {
   executarEnvioProtegido,
   tentarExecutarLoteAutomatico,
@@ -163,22 +164,32 @@ export async function enviarLote(
             precoAtual: decisao.precoAtual,
             descontoPercentual: decisao.descontoPercentual,
           });
+          precoOriginalEnvio = novos.preco_original;
           if (novos.preco_atual !== produto.preco_atual) {
             atualizarPrecoProduto(produto.id, novos);
             precoAtualEnvio = novos.preco_atual;
-            precoOriginalEnvio = novos.preco_original;
           }
         }
 
-        await aguardarIntervaloAntesDaMensagem();
-        await enviar({
+        const dadosEnvio = {
           nome: produto.nome,
           preco_atual: precoAtualEnvio,
           preco_original: precoOriginalEnvio,
           descontoPercentual: descontoEnvio,
           link_afiliado: linkAfiliado,
           imagem_url: produto.imagem_url,
+        };
+        gravarSnapshotTentativa(tentativa.id, {
+          mensagem: montarMensagemDoProduto(dadosEnvio),
+          destinoId: getConfig("whatsapp_grupo_id") || null,
+          destinoNome: getConfig("whatsapp_grupo_nome") || null,
+          plataforma: produto.source_key,
+          titulo: produto.nome,
+          urlOriginal: produto.link_original,
         });
+
+        await aguardarIntervaloAntesDaMensagem();
+        await enviar(dadosEnvio);
       } catch (erro) {
         const mensagemErro =
           erro instanceof Error ? erro.message : String(erro);

@@ -74,12 +74,19 @@ function produtoParaResposta(p: ProdutoComPlataforma) {
 function tentativaParaResposta(t: TentativaEnvio) {
   return {
     id: t.id,
-    origem: t.origem === "automatico" ? "auto" : t.origem,
+    origem: (t.origem as string) === "automatico" ? "auto" : t.origem,
     status: t.status,
     needsReview: t.status === "ambiguous",
     motivo: t.motivo,
     iniciadoEm: t.iniciado_em,
     finalizadoEm: t.finalizado_em,
+    mensagem: {
+      disponivel: Boolean(t.mensagem_snapshot),
+      texto: t.mensagem_snapshot ?? null,
+    },
+    destino: { id: t.destino_id, nome: t.destino_nome },
+    plataforma: t.plataforma,
+    titulo: t.titulo,
   };
 }
 
@@ -298,6 +305,7 @@ router.put("/whatsapp/group", async (req, res) => {
     }
 
     setConfig("whatsapp_grupo_id", grupo.id);
+    setConfig("whatsapp_grupo_nome", grupo.nome);
     res.json({ sucesso: true, grupo });
   } catch (erro) {
     const mensagem = erro instanceof Error ? erro.message : String(erro);
@@ -312,6 +320,7 @@ router.put("/whatsapp/group", async (req, res) => {
 
 router.delete("/whatsapp/group", (_req, res) => {
   setConfig("whatsapp_grupo_id", "");
+  setConfig("whatsapp_grupo_nome", "");
   res.json({ sucesso: true });
 });
 

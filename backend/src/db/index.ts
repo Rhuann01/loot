@@ -270,6 +270,7 @@ const defaults: Record<string, string> = {
   scraper_ultimo_resultado: "",
   scraper_ultimo_erro: "",
   whatsapp_grupo_id: process.env.WHATSAPP_GROUP_ID ?? "",
+  whatsapp_grupo_nome: "",
 };
 
 const inserirDefault = db.prepare(`
@@ -300,6 +301,19 @@ export function aplicarMigracao(versao: number, nome: string, aplicar: () => voi
 
 // Migração 1: o schema ad hoc acima passa a ser a linha de base versionada.
 aplicarMigracao(1, "baseline", () => {});
+
+aplicarMigracao(2, "tentativas_snapshot", () => {
+  for (const coluna of ["mensagem_snapshot","destino_id","destino_nome","erro_codigo","erro_mensagem","plataforma","titulo","url_original"]) {
+    const existentes = db.prepare("PRAGMA table_info(tentativas_de_envio)").all() as Array<{ name: string }>;
+    if (!existentes.some((c) => c.name === coluna)) {
+      db.exec(`ALTER TABLE tentativas_de_envio ADD COLUMN ${coluna} TEXT`);
+    }
+  }
+  db.exec("UPDATE tentativas_de_envio SET origem = 'auto' WHERE origem = 'automatico'");
+  db.exec("UPDATE produtos SET origem_envio_em_andamento = 'auto' WHERE origem_envio_em_andamento = 'automatico'");
+  // Dado inventado: a Shopee nunca informou preço original.
+  db.exec("UPDATE produtos SET preco_original = NULL WHERE source_key = 'shopee'");
+});
 
 console.log(
   "banco de dados pronto: tabelas criadas, configs padrão aplicadas",

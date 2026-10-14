@@ -26,7 +26,7 @@ export interface Produto {
   criado_em: string;
 }
 
-export type OrigemEnvio = "manual" | "automatico";
+export type OrigemEnvio = "manual" | "auto" | "retry";
 
 export interface TentativaEnvio {
   id: number;
@@ -36,6 +36,14 @@ export interface TentativaEnvio {
   motivo: string | null;
   iniciado_em: string;
   finalizado_em: string | null;
+  mensagem_snapshot: string | null;
+  destino_id: string | null;
+  destino_nome: string | null;
+  plataforma: string | null;
+  titulo: string | null;
+  url_original: string | null;
+  erro_codigo: string | null;
+  erro_mensagem: string | null;
 }
 interface NovoProduto {
   source_key?: string;
@@ -349,12 +357,12 @@ export function reservarProdutoParaEnvioComTentativa(): ReservaEnvio | undefined
     if (!produto) return undefined;
 
     db.prepare(
-      `UPDATE produtos SET origem_envio_em_andamento = 'automatico' WHERE id = ?`,
+      `UPDATE produtos SET origem_envio_em_andamento = 'auto' WHERE id = ?`,
     ).run(produto.id);
     const tentativa = db
       .prepare(
         `INSERT INTO tentativas_de_envio (produto_id, origem, status)
-         VALUES (?, 'automatico', 'sending') RETURNING *`,
+         VALUES (?, 'auto', 'sending') RETURNING *`,
       )
       .get(produto.id) as TentativaEnvio;
     return {
@@ -570,6 +578,17 @@ export function buscarTentativaEnvioPorId(id: number): TentativaEnvio | undefine
     .get(id) as TentativaEnvio | undefined;
 }
 
+export function gravarSnapshotTentativa(tentativaId: number, d: {
+  mensagem: string; destinoId: string | null; destinoNome: string | null;
+  plataforma: string; titulo: string; urlOriginal: string | null;
+}) {
+  db.prepare(
+    `UPDATE tentativas_de_envio
+     SET mensagem_snapshot = ?, destino_id = ?, destino_nome = ?, plataforma = ?, titulo = ?, url_original = ?
+     WHERE id = ?`,
+  ).run(d.mensagem, d.destinoId, d.destinoNome, d.plataforma, d.titulo, d.urlOriginal, tentativaId);
+}
+
 export function recuperarEnviosAbandonados(): number {
   const token = randomUUID();
   if (!adquirirLockExecucao("whatsapp_envio", token, 30_000)) return 0;
@@ -601,7 +620,7 @@ export function recuperarEnviosAbandonados(): number {
             `INSERT INTO tentativas_de_envio
              (produto_id, origem, status, motivo, finalizado_em)
              VALUES (?, ?, 'ambiguous', ?, CURRENT_TIMESTAMP)`,
-          ).run(produto.id, produto.origem_envio_em_andamento ?? "automatico", motivo);
+          ).run(produto.id, produto.origem_envio_em_andamento ?? "auto", motivo);
         }
       }
       return produtos.length;
