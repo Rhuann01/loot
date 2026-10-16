@@ -30,7 +30,7 @@ const CardLogin = ({ onLoginSucesso }: CardLoginProps) => {
     setCarregando(true);
 
     try {
-      await api.post("/api/auth/login", { usuario, senha });
+      await api.post("/api/auth/login", { usuario: usuario.trim(), senha });
       onLoginSucesso();
     } catch (err) {
       let mensagem = "Erro ao realizar login";
@@ -50,12 +50,12 @@ const CardLogin = ({ onLoginSucesso }: CardLoginProps) => {
         <form onSubmit={handleSubmit} className="contents">
           <CardHeader>
             <CardTitle>Credenciais de acesso</CardTitle>
-            <CardDescription>Adcione o nome e senha a baixo</CardDescription>
+            <CardDescription>Adicione o nome e senha abaixo</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-6">
               {erro && (
-                <div className="text-sm font-medium text-destructive">
+                <div role="alert" className="text-sm font-medium text-destructive">
                   {erro}
                 </div>
               )}
@@ -64,6 +64,7 @@ const CardLogin = ({ onLoginSucesso }: CardLoginProps) => {
                 <Input
                   id="user"
                   type="text"
+                  autoComplete="username"
                   required
                   value={usuario}
                   onChange={(e) => setUsuario(e.target.value)}
@@ -75,6 +76,7 @@ const CardLogin = ({ onLoginSucesso }: CardLoginProps) => {
                 <Input
                   id="senha"
                   type="password"
+                  autoComplete="current-password"
                   required
                   value={senha}
                   onChange={(e) => setSenha(e.target.value)}
