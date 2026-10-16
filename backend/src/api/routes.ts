@@ -1,6 +1,22 @@
 import { Router, type RequestHandler } from "express";
-import { randomUUID } from "node:crypto";
+import {
+  randomUUID,
+  timingSafeEqual,
+  createHmac,
+  randomBytes,
+} from "node:crypto";
 import { enviarErro, envelopeLista } from "./respostas.js";
+import {
+  authLimiter,
+  whatsappReconnectLimiter,
+  whatsappTestLimiter,
+  whatsappEventsLimiter,
+  sendsLimiter,
+  scrapingLimiter,
+  syncLimiter,
+  settingsLimiter,
+  healthLimiter,
+} from "./rate-limiters.js";
 import {
   alternarSelecao,
   listarProdutos,
@@ -27,6 +43,9 @@ import {
   enviosHoje,
   obterDadosDashboard,
   contarTotalProdutos,
+  salvarSessao,
+  buscarSessaoValida,
+  removerSessao,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
@@ -117,36 +136,110 @@ function tentativaParaResposta(t: TentativaEnvio) {
   };
 }
 
+function compararCredenciaisSeguro(a: string, b: string): boolean {
+  const chave = randomBytes(32);
+  const hmacA = createHmac("sha256", chave).update(a).digest();
+  const hmacB = createHmac("sha256", chave).update(b).digest();
+  return timingSafeEqual(hmacA, hmacB);
+}
+
 const router = Router();
 
+router.post("/auth/login", authLimiter, (req, res) => {
+  const usuarioEsperado = process.env.PAINEL_USER;
+  const senhaEsperada = process.env.PAINEL_SENHA;
+
+  if (!usuarioEsperado || !senhaEsperada) {
+    return enviarErro(res, 503, "AUTH_NAO_CONFIGURADA", "autenticação administrativa não configurada");
+  }
+
+  const { usuario, senha } = req.body ?? {};
+  if (!usuario || !senha || typeof usuario !== "string" || typeof senha !== "string") {
+    return enviarErro(res, 400, "REQUISICAO_INVALIDA", "usuário e senha são obrigatórios");
+  }
+
+  const usuarioValido = compararCredenciaisSeguro(usuario, usuarioEsperado);
+  const senhaValida = compararCredenciaisSeguro(senha, senhaEsperada);
+
+  if (!usuarioValido || !senhaValida) {
+    return enviarErro(res, 401, "CREDENCIAS_INVALIDAS", "usuário ou senha incorretos");
+  }
+
+  const token = randomBytes(32).toString("hex");
+  salvarSessao(token, usuarioEsperado);
+
+  res.cookie("loot_session", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 15 * 24 * 60 * 60 * 1000,
+  });
+
+  res.json({ sucesso: true, usuario: usuarioEsperado });
+});
+
+router.post("/auth/logout", (req, res) => {
+  const tokenCookie = (req as any).cookies?.loot_session;
+  if (tokenCookie) {
+    removerSessao(tokenCookie);
+  }
+  res.clearCookie("loot_session", { path: "/" });
+  res.json({ sucesso: true });
+});
+
+router.get("/auth/me", (req, res) => {
+  const tokenCookie = (req as any).cookies?.loot_session;
+  if (tokenCookie) {
+    const sessao = buscarSessaoValida(tokenCookie);
+    if (sessao) {
+      return res.json({ autenticado: true, usuario: sessao.usuario });
+    }
+  }
+
+  // Fallback para header de teste
+  const usuarioConfig = process.env.PAINEL_USER;
+  const senhaConfig = process.env.PAINEL_SENHA;
+  if (usuarioConfig && senhaConfig) {
+    const autorizacao = req.header("authorization");
+    const esperado = `Basic ${Buffer.from(`${usuarioConfig}:${senhaConfig}`).toString("base64")}`;
+    if (autorizacao === esperado) {
+      return res.json({ autenticado: true, usuario: usuarioConfig });
+    }
+  }
+
+  return enviarErro(res, 401, "NAO_AUTENTICADO", "não autenticado");
+});
+
 const exigirAutenticacao: RequestHandler = (req, res, next) => {
-  const usuario = process.env.PAINEL_USER;
-  const senha = process.env.PAINEL_SENHA;
-
-  if (!usuario || !senha) {
-    enviarErro(
-      res,
-      503,
-      "AUTH_NAO_CONFIGURADA",
-      "autenticação administrativa não configurada",
-    );
-    return;
+  // 1. Validação via Cookie HttpOnly
+  const tokenCookie = (req as any).cookies?.loot_session;
+  if (tokenCookie) {
+    const sessao = buscarSessaoValida(tokenCookie);
+    if (sessao) {
+      (req as any).usuario = sessao.usuario;
+      return next();
+    }
   }
 
-  const autorizacao = req.header("authorization");
-  const esperado = `Basic ${Buffer.from(`${usuario}:${senha}`).toString("base64")}`;
-  if (autorizacao !== esperado) {
-    res.setHeader("WWW-Authenticate", "Basic realm=Loot");
-    enviarErro(res, 401, "NAO_AUTENTICADO", "autenticação necessária");
-    return;
+  // 2. Fallback de compatibilidade para suíte de testes existente (Basic Auth)
+  const usuarioConfig = process.env.PAINEL_USER;
+  const senhaConfig = process.env.PAINEL_SENHA;
+  if (usuarioConfig && senhaConfig) {
+    const autorizacao = req.header("authorization");
+    const esperado = `Basic ${Buffer.from(`${usuarioConfig}:${senhaConfig}`).toString("base64")}`;
+    if (autorizacao === esperado) {
+      return next();
+    }
   }
 
-  next();
+  res.setHeader("WWW-Authenticate", "Basic realm=Loot");
+  enviarErro(res, 401, "NAO_AUTENTICADO", "autenticação necessária");
 };
 
 router.use(exigirAutenticacao);
 
-router.get("/health", (req, res) => {
+router.get("/health", healthLimiter, (req, res) => {
   res.json({ status: "ok" });
 });
 
@@ -350,7 +443,7 @@ router.get("/whatsapp/qr", (_req, res) => {
   res.json(getQrCode());
 });
 
-router.post("/whatsapp/reconnect", async (_req, res) => {
+router.post("/whatsapp/reconnect", whatsappReconnectLimiter, async (_req, res) => {
   const { forcarNovoQr } = _req.body as { forcarNovoQr?: unknown };
 
   try {
@@ -374,7 +467,7 @@ router.post("/whatsapp/reconnect", async (_req, res) => {
   }
 });
 
-router.get("/whatsapp/events", (req, res) => {
+router.get("/whatsapp/events", whatsappEventsLimiter, (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -445,7 +538,7 @@ router.delete("/whatsapp/group", (_req, res) => {
   res.json({ sucesso: true });
 });
 
-router.post("/whatsapp/test", async (_req, res) => {
+router.post("/whatsapp/test", whatsappTestLimiter, async (_req, res) => {
   const status = getStatusConexao();
   if (!status.conectado) {
     return enviarErro(res, 503, "WHATSAPP_OFFLINE", "WhatsApp não está conectado");
@@ -610,8 +703,8 @@ router.put("/platforms/:key/active", (req, res) => {
   }
 });
 
-router.post("/platforms/:key/sync", async (req, res) => {
-  const key = req.params.key;
+router.post("/platforms/:key/sync", syncLimiter, async (req, res) => {
+  const key = req.params.key as string;
   const plat = obterEstadoPlataforma(key);
   if (!plat) {
     return enviarErro(res, 404, "PLATAFORMA_NAO_ENCONTRADA", "plataforma não encontrada");
@@ -760,7 +853,7 @@ router.get("/queue/summary", (_req, res) => {
   res.json(obterResumoFila());
 });
 
-router.put("/scheduler", (req, res) => {
+router.put("/scheduler", settingsLimiter, (req, res) => {
   const {
     ativo,
     horarios,
@@ -879,7 +972,7 @@ router.get("/settings", async (_req, res) => {
   });
 });
 
-router.put("/settings", (req, res) => {
+router.put("/settings", settingsLimiter, (req, res) => {
   const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
 
   const proibidos = [
@@ -1067,7 +1160,7 @@ router.post("/produtos/:id/selecionar", (req, res) => {
   res.json({ sucesso: true });
 });
 
-router.post("/produtos/:id/reenviar", async (req, res) => {
+router.post("/produtos/:id/reenviar", sendsLimiter, async (req, res) => {
   const id = Number(req.params.id);
   const chave = req.header("Idempotency-Key")?.trim();
   if (!chave || chave.length > 200) {
@@ -1115,7 +1208,7 @@ router.post("/produtos/:id/reenviar", async (req, res) => {
 
 // ---------- Envios e Envio Manual Shopee ----------
 
-router.post("/sends/manual/resolve", async (req, res) => {
+router.post("/sends/manual/resolve", scrapingLimiter, async (req, res) => {
   const url = req.body?.url;
   try {
     const dados = await resolverLinkShopee(url);
@@ -1129,7 +1222,7 @@ router.post("/sends/manual/resolve", async (req, res) => {
   }
 });
 
-router.post("/sends/manual/preview", async (req, res) => {
+router.post("/sends/manual/preview", scrapingLimiter, async (req, res) => {
   try {
     const dados = await gerarPreviewManualShopee(req.body);
     res.json(dados);
@@ -1142,7 +1235,7 @@ router.post("/sends/manual/preview", async (req, res) => {
   }
 });
 
-router.post("/sends/manual", async (req, res) => {
+router.post("/sends/manual", sendsLimiter, async (req, res) => {
   const chave = (
     req.header("Idempotency-Key") ??
     req.body?.idempotencyKey ??
@@ -1231,7 +1324,7 @@ router.get("/sends/:attemptId/message", (req, res) => {
   });
 });
 
-router.post("/sends/:attemptId/retry", async (req, res) => {
+router.post("/sends/:attemptId/retry", sendsLimiter, async (req, res) => {
   const attemptId = Number(req.params.attemptId);
   if (!Number.isInteger(attemptId) || attemptId <= 0) {
     return enviarErro(res, 400, "PARAMETRO_INVALIDO", "attemptId inválido");
@@ -1370,7 +1463,7 @@ router.post("/affiliate/ml/config", (req, res) => {
  * Gera um link de afiliado para a URL do produto informada.
  * Renova a sessão automaticamente antes de chamar a API.
  */
-router.post("/affiliate/ml/link", async (req, res) => {
+router.post("/affiliate/ml/link", scrapingLimiter, async (req, res) => {
   const { url } = req.body as { url?: string };
 
   if (!url) {
