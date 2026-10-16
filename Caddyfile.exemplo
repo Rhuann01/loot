@@ -1,0 +1,49 @@
+# Exemplo de configuração Caddy para o Loot em produção
+# O Caddy atua como proxy reverso com HTTPS automático via Let's Encrypt / ZeroSSL,
+# servindo o frontend estático e encaminhando requisições de API para o backend Node.js.
+#
+# Como usar:
+# 1. Substitua "seu-dominio.com.br" pelo domínio real da aplicação.
+# 2. Certifique-se de que o backend Node.js está em execução na porta 3000.
+# 3. Certifique-se de que o build do frontend foi gerado em ./frontend/dist (npm run build).
+# 4. Inicie o Caddy: caddy run --config Caddyfile.exemplo
+
+seu-dominio.com.br {
+    # Compactação eficiente de respostas
+    encode zstd gzip
+
+    # Cabeçalhos globais de segurança
+    header {
+        # Previne ataques de MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # Previne clickjacking
+        X-Frame-Options "DENY"
+        # Política de referência restritiva
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Previne acesso indevido a recursos de câmera/microfone
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        # Remove cabeçalho de identificação do servidor
+        -Server
+    }
+
+    # Roteamento de rotas da API e SSE do WhatsApp para o backend Node.js
+    handle /api/* {
+        reverse_proxy localhost:3000 {
+            # Repassa o IP real do cliente para o express-rate-limit
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Host {host}
+
+            # Configurações para Server-Sent Events (SSE - /api/whatsapp/events)
+            flush_interval -1
+        }
+    }
+
+    # Frontend Single Page Application (SPA)
+    handle {
+        root * /caminho/para/Loot/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+}
