@@ -29,14 +29,6 @@ function App() {
 
     eventoAuth.addEventListener("desautenticado", handleDesautenticado);
 
-    if (import.meta.env.DEV && window.location.search.includes("bypass_auth=1")) {
-      setAutenticado(true);
-      setCarregando(false);
-      return () => {
-        eventoAuth.removeEventListener("desautenticado", handleDesautenticado);
-      };
-    }
-
     api
       .get("/api/auth/me")
       .then(() => {
