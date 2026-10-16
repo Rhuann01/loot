@@ -181,10 +181,15 @@ router.post("/auth/login", authLimiter, (req, res) => {
 
 router.post("/auth/logout", (req, res) => {
   const tokenCookie = (req as any).cookies?.loot_session;
-  if (tokenCookie) {
+  if (typeof tokenCookie === "string") {
     removerSessao(tokenCookie);
   }
-  res.clearCookie("loot_session", { path: "/" });
+  res.clearCookie("loot_session", {
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  });
   res.json({ sucesso: true });
 });
 
@@ -200,10 +205,10 @@ router.get("/auth/me", (req, res) => {
   // Fallback para header de teste
   const usuarioConfig = process.env.PAINEL_USER;
   const senhaConfig = process.env.PAINEL_SENHA;
-  if (usuarioConfig && senhaConfig) {
+  if (process.env.NODE_ENV === "test" && usuarioConfig && senhaConfig) {
     const autorizacao = req.header("authorization");
     const esperado = `Basic ${Buffer.from(`${usuarioConfig}:${senhaConfig}`).toString("base64")}`;
-    if (autorizacao === esperado) {
+    if (autorizacao && compararCredenciaisSeguro(autorizacao, esperado)) {
       return res.json({ autenticado: true, usuario: usuarioConfig });
     }
   }
@@ -225,10 +230,10 @@ const exigirAutenticacao: RequestHandler = (req, res, next) => {
   // 2. Fallback de compatibilidade para suíte de testes existente (Basic Auth)
   const usuarioConfig = process.env.PAINEL_USER;
   const senhaConfig = process.env.PAINEL_SENHA;
-  if (usuarioConfig && senhaConfig) {
+  if (process.env.NODE_ENV === "test" && usuarioConfig && senhaConfig) {
     const autorizacao = req.header("authorization");
     const esperado = `Basic ${Buffer.from(`${usuarioConfig}:${senhaConfig}`).toString("base64")}`;
-    if (autorizacao === esperado) {
+    if (autorizacao && compararCredenciaisSeguro(autorizacao, esperado)) {
       return next();
     }
   }
