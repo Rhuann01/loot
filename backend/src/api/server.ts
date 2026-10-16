@@ -41,7 +41,7 @@ function sanitizarParaLog(dado: unknown, visitados = new WeakSet<object>()): unk
     let msg = dado.message;
     msg = msg.replace(/basic\s+[a-z0-9+/=]+/gi, "Basic [redigido]");
     msg = msg.replace(/bearer\s+[a-z0-9_.-]+/gi, "Bearer [redigido]");
-    msg = msg.replace(/(?:senha|password|token|secret|cookie|apiKey)=([^&\s]+)/gi, "$1=[redigido]");
+    msg = msg.replace(/(senha|password|token|secret|cookie|apiKey)=[^&\s]+/gi, "$1=[redigido]");
     return { name: dado.name, message: msg, stack: dado.stack?.split("\n").slice(0, 3).join("\n") };
   }
   const limpo: Record<string, unknown> = (Array.isArray(dado) ? [] : {}) as Record<string, unknown>;
