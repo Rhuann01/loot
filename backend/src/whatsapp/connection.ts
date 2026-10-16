@@ -63,7 +63,7 @@ async function criarConexao(): Promise<WASocket> {
   const { state, saveCreds } = await useMultiFileAuthState("auth_info");
   const sock = makeWASocket({
     auth: state,
-    logger: pino({ level: "warn" }),
+    logger: pino({ level: "silent" }),
     browser: ["Loot", "Chrome", "1.0.0"],
     generateHighQualityLinkPreview: true,
   });
@@ -99,11 +99,8 @@ async function criarConexao(): Promise<WASocket> {
       const foiDeslogado = motivoErro === DisconnectReason.loggedOut;
       const foiSubstituido = motivoErro === DisconnectReason.connectionReplaced;
 
-      console.error(
-        "conexão do WhatsApp fechada:",
-        motivoErro ?? "código desconhecido",
-        lastDisconnect?.error,
-      );
+      const erroMsg = (lastDisconnect?.error as Error)?.message ?? "erro de conexão";
+      console.error("conexão fechada:", erroMsg);
 
       if (foiDeslogado) {
         atualizarEstado("deslogado");
