@@ -5,8 +5,9 @@ import Promocoes from "./components/screens/Promocoes ";
 import Plataformas from "./components/screens/Plataformas ";
 import Envios from "./components/screens/Envios";
 import Configuracoes from "./components/screens/Configuracoes";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import CardLogin from "./components/CardLogin";
+import { api, eventoAuth } from "./services/api";
 
 const screens: Record<number, React.ReactNode> = {
   1: <Dashboard />,
@@ -18,13 +19,53 @@ const screens: Record<number, React.ReactNode> = {
 
 function App() {
   const [index, setIndex] = useState(1);
-  const [login] = useState(false);
+  const [autenticado, setAutenticado] = useState(false);
+  const [carregando, setCarregando] = useState(true);
+
+  useEffect(() => {
+    const handleDesautenticado = () => {
+      setAutenticado(false);
+    };
+
+    eventoAuth.addEventListener("desautenticado", handleDesautenticado);
+
+    if (import.meta.env.DEV && window.location.search.includes("bypass_auth=1")) {
+      setAutenticado(true);
+      setCarregando(false);
+      return () => {
+        eventoAuth.removeEventListener("desautenticado", handleDesautenticado);
+      };
+    }
+
+    api
+      .get("/api/auth/me")
+      .then(() => {
+        setAutenticado(true);
+      })
+      .catch(() => {
+        setAutenticado(false);
+      })
+      .finally(() => {
+        setCarregando(false);
+      });
+
+    return () => {
+      eventoAuth.removeEventListener("desautenticado", handleDesautenticado);
+    };
+  }, []);
 
   return (
     <main className=" overflow-hidden w-full bg-background h-full flex flex-col justify-center items-center">
-      {login && <CardLogin />}
-      {screens[index]}
-      <Downbar ativo={index} onChange={setIndex} />
+      {carregando ? (
+        <div className="text-muted-foreground text-sm">Carregando...</div>
+      ) : !autenticado ? (
+        <CardLogin onLoginSucesso={() => setAutenticado(true)} />
+      ) : (
+        <>
+          {screens[index]}
+          <Downbar ativo={index} onChange={setIndex} />
+        </>
+      )}
     </main>
   );
 }
