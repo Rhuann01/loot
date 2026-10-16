@@ -6,6 +6,7 @@ import { enviarErro } from "./respostas.js";
 import { generalLimiter } from "./rate-limiters.js";
 
 export const app = express();
+app.set("trust proxy", 1);
 
 const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
   .split(",")
@@ -32,17 +33,23 @@ app.use((_req, res) => {
   enviarErro(res, 404, "NAO_ENCONTRADO", "rota não encontrada");
 });
 
-function sanitizarParaLog(dado: unknown): unknown {
+function sanitizarParaLog(dado: unknown, visitados = new WeakSet<object>()): unknown {
   if (!dado || typeof dado !== "object") return dado;
+  if (visitados.has(dado)) return "[circular]";
+  visitados.add(dado);
   if (dado instanceof Error) {
-    return { name: dado.name, message: dado.message, stack: dado.stack?.split("\n").slice(0, 3).join("\n") };
+    let msg = dado.message;
+    msg = msg.replace(/basic\s+[a-z0-9+/=]+/gi, "Basic [redigido]");
+    msg = msg.replace(/bearer\s+[a-z0-9_.-]+/gi, "Bearer [redigido]");
+    msg = msg.replace(/(?:senha|password|token|secret|cookie|apiKey)=([^&\s]+)/gi, "$1=[redigido]");
+    return { name: dado.name, message: msg, stack: dado.stack?.split("\n").slice(0, 3).join("\n") };
   }
-  const limpo: Record<string, unknown> = {};
+  const limpo: Record<string, unknown> = (Array.isArray(dado) ? [] : {}) as Record<string, unknown>;
   for (const [k, v] of Object.entries(dado as Record<string, unknown>)) {
     if (/senha|password|token|cookie|authorization|secret|apiKey/i.test(k)) {
       limpo[k] = "[redigido]";
     } else {
-      limpo[k] = typeof v === "object" ? sanitizarParaLog(v) : v;
+      limpo[k] = typeof v === "object" ? sanitizarParaLog(v, visitados) : v;
     }
   }
   return limpo;

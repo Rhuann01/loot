@@ -7,10 +7,12 @@ function criarLimitador(opcoes: {
   max: number;
   mensagem: string;
   skipInTests?: boolean;
+  skipSuccessfulRequests?: boolean;
 }) {
   return rateLimit({
     windowMs: opcoes.janelaMs,
     limit: opcoes.max,
+    ...(opcoes.skipSuccessfulRequests !== undefined ? { skipSuccessfulRequests: opcoes.skipSuccessfulRequests } : {}),
     standardHeaders: "draft-7",
     legacyHeaders: false,
     skip: (_req) => {
@@ -31,6 +33,7 @@ export const authLimiter = criarLimitador({
   janelaMs: 15 * 60 * 1000,
   max: 5,
   mensagem: "Muitas tentativas de login. Aguarde 15 minutos.",
+  skipSuccessfulRequests: true,
 });
 
 // 2. WhatsApp Reconnect: 3 tentativas em 5 minutos
