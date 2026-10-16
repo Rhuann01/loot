@@ -115,6 +115,7 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_sessoes_token ON sessoes(token);
+  CREATE INDEX IF NOT EXISTS idx_sessoes_expira_em ON sessoes(expira_em);
 `);
 
 const colunasIntegracoes = db

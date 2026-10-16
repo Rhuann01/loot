@@ -1696,4 +1696,50 @@ export function contarTotalProdutos(): number {
   return row?.n ?? 0;
 }
 
+export interface SessaoUsuario {
+  token: string;
+  usuario: string;
+  criado_em: string;
+  expira_em: string;
+}
+
+export function salvarSessao(
+  token: string,
+  usuario: string,
+  duracaoMs = 15 * 24 * 60 * 60 * 1000,
+): void {
+  const agora = new Date();
+  const criadoEm = agora.toISOString();
+  const expiraEm = new Date(agora.getTime() + duracaoMs).toISOString();
+
+  db.prepare(
+    `INSERT INTO sessoes (token, usuario, criado_em, expira_em) VALUES (?, ?, ?, ?)`,
+  ).run(token, usuario, criadoEm, expiraEm);
+}
+
+export function buscarSessaoValida(
+  token: string,
+): { token: string; usuario: string } | null {
+  if (!token || typeof token !== "string") return null;
+
+  const agora = new Date().toISOString();
+  const row = db
+    .prepare(
+      `SELECT token, usuario FROM sessoes WHERE token = ? AND expira_em > ?`,
+    )
+    .get(token, agora) as { token: string; usuario: string } | undefined;
+
+  return row ?? null;
+}
+
+export function removerSessao(token: string): void {
+  if (!token) return;
+  db.prepare(`DELETE FROM sessoes WHERE token = ?`).run(token);
+}
+
+export function limparSessoesExpiradas(): void {
+  const agora = new Date().toISOString();
+  db.prepare(`DELETE FROM sessoes WHERE expira_em <= ?`).run(agora);
+}
+
 
