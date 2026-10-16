@@ -8,6 +8,20 @@ try {
   const resMeSemAuth = await api.req("/api/auth/me", {}, false);
   assert.equal(resMeSemAuth.status, 401, "me sem auth deve ser 401");
 
+  // 1b. CORS com credentials: true deve permitir envio de cookies
+  const resCors = await api.req(
+    "/api/auth/me",
+    {
+      headers: { Origin: "http://localhost:5173" },
+    },
+    false,
+  );
+  assert.equal(
+    resCors.headers.get("access-control-allow-credentials"),
+    "true",
+    "CORS deve retornar access-control-allow-credentials: true",
+  );
+
   // 2. Login com senha incorreta deve retornar 401
   const resLoginInvalido = await api.req(
     "/api/auth/login",
@@ -62,6 +76,16 @@ try {
   assert.equal((resMeComCookie.json as any).autenticado, true);
   assert.equal((resMeComCookie.json as any).usuario, "teste");
 
+  // 5b. Rota protegida com token forjado/inexistente deve retornar 401
+  const resTokenFalso = await api.req(
+    "/api/produtos",
+    {
+      headers: { Cookie: "loot_session=token_forjado_e_inexistente_123" },
+    },
+    false,
+  );
+  assert.equal(resTokenFalso.status, 401, "cookie forjado deve ser rejeitado com 401");
+
   // 6. Testar Rate Limiting no Login (estourar quota de 5 erros)
   let bateuRateLimit = false;
   for (let i = 0; i < 7; i++) {
@@ -91,6 +115,8 @@ try {
     false,
   );
   assert.equal(resLogout.status, 200);
+  const clearCookieHeader = resLogout.headers.get("set-cookie");
+  assert.ok(clearCookieHeader?.includes("loot_session="), "logout deve limpar cookie");
 
   // 8. Rota protegida com token após logout deve retornar 401
   const resPosLogout = await api.req(

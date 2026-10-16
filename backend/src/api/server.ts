@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import routes from "./routes.js";
 import { enviarErro } from "./respostas.js";
 import { generalLimiter } from "./rate-limiters.js";
+import { limparSessoesExpiradas } from "../db/queries.js";
 
 export const app = express();
 app.set("trust proxy", 1);
@@ -22,6 +23,7 @@ app.use(cors({
 
     callback(new Error("origem não autorizada pelo CORS"));
   },
+  credentials: true,
 }));
 app.use(cookieParser());
 app.use(express.json());
@@ -68,6 +70,12 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 export function iniciarServidor() {
+  try {
+    limparSessoesExpiradas();
+  } catch (erro) {
+    console.error("falha ao limpar sessões expiradas na inicialização:", erro);
+  }
+
   const porta = process.env.PORT ?? 3000;
 
   return app.listen(porta, () => {
