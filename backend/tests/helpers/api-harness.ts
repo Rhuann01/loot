@@ -20,6 +20,7 @@ export async function iniciarApiDeTeste(): Promise<ApiDeTeste> {
   const diretorioOriginal = process.cwd();
   const diretorio = mkdtempSync(join(tmpdir(), "loot-api-"));
   process.chdir(diretorio);
+  process.env.NODE_ENV = "test";
   process.env.PAINEL_USER = "teste";
   process.env.PAINEL_SENHA = "senha";
   process.env.CORS_ORIGINS = "http://localhost:5173";

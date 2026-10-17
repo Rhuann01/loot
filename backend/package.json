@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "pretest": "tsc",
-    "test": "node dist/tests/testar_ml_cookies.js && node dist/tests/testar_fila_ofertas.js && node dist/tests/testar_envios_confiaveis.js && node dist/tests/testar_shopee_conversao.js && node dist/tests/testar_api_base.js && node dist/tests/testar_api_formato.js && node dist/tests/testar_migracoes.js && node dist/tests/testar_api_promocoes.js && node dist/tests/testar_mensagem.js && node dist/tests/testar_historico_comissao.js && node dist/tests/testar_api_plataformas.js && node dist/tests/testar_envio_manual_shopee.js && node dist/tests/testar_api_dashboard.js && node dist/tests/testar_api_settings.js && node dist/tests/testar_retencao.js && node dist/tests/testar_seguranca_final.js",
+    "test": "node dist/tests/testar_ml_cookies.js && node dist/tests/testar_fila_ofertas.js && node dist/tests/testar_envios_confiaveis.js && node dist/tests/testar_shopee_conversao.js && node dist/tests/testar_api_base.js && node dist/tests/testar_api_formato.js && node dist/tests/testar_migracoes.js && node dist/tests/testar_api_promocoes.js && node dist/tests/testar_mensagem.js && node dist/tests/testar_historico_comissao.js && node dist/tests/testar_api_plataformas.js && node dist/tests/testar_envio_manual_shopee.js && node dist/tests/testar_api_dashboard.js && node dist/tests/testar_api_settings.js && node dist/tests/testar_retencao.js && node dist/tests/testar_seguranca_final.js && node dist/tests/testar_auth_e_rate_limit.js",
     "build": "tsc",
     "start": "node dist/src/index.js",
     "test:whatsapp": "npm run build && node dist/tests/testar_whatsapp_conexao.js",
@@ -18,6 +18,7 @@
   "type": "module",
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
@@ -34,9 +35,11 @@
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "apify-client": "^2.25.0",
     "better-sqlite3": "^13.0.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.1",
     "link-preview-js": "^3.2.0",
     "pino": "^10.3.1",
     "puppeteer": "^25.12.0",

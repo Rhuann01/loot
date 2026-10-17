@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { getConfig } from "../../db/queries.js";
 
 const ENDPOINT = "https://open-api.affiliate.shopee.com.br/graphql";
 
@@ -32,8 +33,8 @@ export function calcularAssinatura(
 }
 
 function credenciais() {
-  const appId = process.env.SHOPEE_APP_ID;
-  const secret = process.env.SHOPEE_SECRET;
+  const appId = getConfig("shopee_app_id") || process.env.SHOPEE_APP_ID;
+  const secret = getConfig("shopee_secret") || process.env.SHOPEE_SECRET;
   if (!appId || !secret) {
     throw new ShopeeApiError("SHOPEE_APP_ID/SHOPEE_SECRET não configurados");
   }
