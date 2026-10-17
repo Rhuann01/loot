@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -5,6 +8,9 @@ import routes from "./routes.js";
 import { enviarErro } from "./respostas.js";
 import { generalLimiter } from "./rate-limiters.js";
 import { limparSessoesExpiradas } from "../db/queries.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export const app = express();
 app.set("trust proxy", 1);
@@ -28,8 +34,29 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 
+function resolverDistFrontend(): string | null {
+  const candidatos = [
+    path.resolve(__dirname, "../../../frontend/dist"),
+    path.resolve(__dirname, "../../../../frontend/dist"),
+    path.resolve(process.cwd(), "frontend/dist"),
+    path.resolve(process.cwd(), "../frontend/dist"),
+  ];
+  return candidatos.find((caminho) => fs.existsSync(caminho)) ?? null;
+}
+
 app.use("/api", generalLimiter);
 app.use("/api", routes);
+
+const distFrontend = resolverDistFrontend();
+if (distFrontend) {
+  app.use(express.static(distFrontend));
+  app.use((req, res, next) => {
+    if (req.method === "GET" && !req.path.startsWith("/api")) {
+      return res.sendFile(path.join(distFrontend, "index.html"));
+    }
+    next();
+  });
+}
 
 app.use((_req, res) => {
   enviarErro(res, 404, "NAO_ENCONTRADO", "rota não encontrada");

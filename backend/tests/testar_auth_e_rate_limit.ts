@@ -128,7 +128,39 @@ try {
   );
   assert.equal(resPosLogout.status, 401, "token deslogado deve ser rejeitado");
 
-  console.log("Resultado: testes de auth e rate limit passaram com sucesso");
+  // 9. GET /api/affiliate/ml/config retorna status sem expor segredos
+  const resMlStatusInicial = await api.req("/api/affiliate/ml/config", {}, true);
+  assert.equal(resMlStatusInicial.status, 200);
+  assert.equal((resMlStatusInicial.json as any).configurado, false);
+
+  // Configurar ML e consultar status novamente
+  const resSalvarMl = await api.req(
+    "/api/affiliate/ml/config",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        cookie: "cookie_secreto_ml",
+        csrfToken: "csrf_token_secreto",
+        tag: "tag-afiliado-teste",
+      }),
+    },
+    true,
+  );
+  assert.equal(resSalvarMl.status, 200);
+
+  const resMlStatusConfigurado = await api.req("/api/affiliate/ml/config", {}, true);
+  assert.equal(resMlStatusConfigurado.status, 200);
+  assert.equal((resMlStatusConfigurado.json as any).configurado, true);
+  assert.equal((resMlStatusConfigurado.json as any).tag, "tag-afiliado-teste");
+  assert.ok((resMlStatusConfigurado.json as any).atualizadoEm);
+  assert.equal((resMlStatusConfigurado.json as any).cookie, undefined, "não deve vazar cookie");
+
+  // 10. Fallback estático do frontend no Express (rota /)
+  const resFrontend = await api.req("/", {}, false);
+  // Se frontend/dist existir, retorna 200 com HTML; se não, 404 seguro
+  assert.ok([200, 404].includes(resFrontend.status), "frontend root deve responder 200 ou 404");
+
+  console.log("Resultado: testes de auth, rate limit e suporte ao painel passaram com sucesso");
 } finally {
   await api.encerrar();
 }

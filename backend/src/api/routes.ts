@@ -46,6 +46,7 @@ import {
   salvarSessao,
   buscarSessaoValida,
   removerSessao,
+  buscarSessaoAfiliado,
   type AbaProdutos,
   type ProdutoComPlataforma,
   type TentativaEnvio,
@@ -1459,6 +1460,27 @@ router.post("/affiliate/ml/config", (req, res) => {
 
   configurarSessaoML(cookie, csrfToken, tag);
   res.json({ sucesso: true, mensagem: "Sessão do Mercado Livre configurada." });
+});
+
+/**
+ * GET /affiliate/ml/config
+ * Retorna o status da sessão do Mercado Livre sem expor dados confidenciais.
+ */
+router.get("/affiliate/ml/config", (_req, res) => {
+  const sessao = buscarSessaoAfiliado("mercadolivre");
+  if (!sessao) {
+    return res.json({
+      configurado: false,
+      tag: null,
+      atualizadoEm: null,
+    });
+  }
+
+  res.json({
+    configurado: true,
+    tag: sessao.tag,
+    atualizadoEm: sessao.atualizado_em,
+  });
 });
 
 /**
