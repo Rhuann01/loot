@@ -42,6 +42,7 @@ import {
   listarEnviosPaginado,
   enviosHoje,
   obterDadosDashboard,
+  atualizarLinkAfiliadoPorFonte,
   contarTotalProdutos,
   salvarSessao,
   buscarSessaoValida,
@@ -60,7 +61,12 @@ import {
   executarEnvioManualShopee,
   ShopeeUrlError,
 } from "../whatsapp/envio-manual-shopee.js";
-import { sincronizarPlataforma } from "../integrations/registry.js";
+import {
+  sincronizarPlataforma,
+  temAffiliateProvider,
+  getAffiliateProvider,
+} from "../integrations/registry.js";
+import type { IntegrationKey } from "../integrations/types.js";
 import {
   getQrCode,
   getStatusConexao,
@@ -95,6 +101,12 @@ function statusApresentacao(p: Produto): string {
 }
 
 function produtoParaResposta(p: ProdutoComPlataforma) {
+  const ultima = obterUltimaComissao(p.id);
+  const valorComissao =
+    p.source_key === "shopee" && ultima && ultima.comissao_valor !== null
+      ? ultima.comissao_valor
+      : null;
+
   return {
     id: p.id,
     plataforma: { key: p.source_key, nome: p.plataforma_nome },
@@ -115,6 +127,11 @@ function produtoParaResposta(p: ProdutoComPlataforma) {
     ultimoErro: p.ultimo_erro_envio,
     ofertaExpiraEm: p.oferta_expira_em,
     criadoEm: p.criado_em,
+    comissao: {
+      valor: valorComissao,
+      disponivel: valorComissao !== null && p.source_key === "shopee",
+      estimada: true,
+    },
   };
 }
 
@@ -1181,7 +1198,13 @@ router.post("/produtos/:id/reenviar", sendsLimiter, async (req, res) => {
   try {
     const resultado = await reenviarManualIdempotente(id, chave);
     const status = statusHttpReenvioManual(resultado);
-    if (resultado === "sent") return res.status(status).json({ sucesso: true });
+    if (resultado === "sent") {
+      const produtoAtualizado = buscarProdutoComPlataforma(id);
+      return res.status(status).json({
+        sucesso: true,
+        linkAfiliado: produtoAtualizado?.link_afiliado,
+      });
+    }
     if (resultado === "sending") return res.status(status).json({ status: resultado });
     if (resultado === "conflito") {
       return enviarErro(
@@ -1209,6 +1232,55 @@ router.post("/produtos/:id/reenviar", sendsLimiter, async (req, res) => {
     );
   } catch {
     enviarErro(res, 502, "ERRO_INTERNO", "não foi possível confirmar o envio manual");
+  }
+});
+
+router.post("/produtos/:id/gerar-link", scrapingLimiter, async (req, res) => {
+  const id = Number(req.params.id);
+  const produto = buscarProdutoComPlataforma(id);
+  if (!produto) {
+    return enviarErro(res, 404, "NAO_ENCONTRADO", "produto não encontrado");
+  }
+
+  if (!temAffiliateProvider(produto.source_key)) {
+    return enviarErro(
+      res,
+      400,
+      "NAO_SUPORTADO",
+      "plataforma não possui provedor de afiliado configurado",
+    );
+  }
+
+  if (!produto.link_original || !produto.link_original.trim()) {
+    return enviarErro(
+      res,
+      400,
+      "LINK_ORIGINAL_AUSENTE",
+      "produto não possui URL original para gerar link de afiliado",
+    );
+  }
+
+  try {
+    const provider = getAffiliateProvider(produto.source_key as IntegrationKey);
+    const linkGerado = await provider.generateLink(produto.link_original);
+    if (!linkGerado.trim() || linkGerado === produto.link_original) {
+      return enviarErro(
+        res,
+        502,
+        "LINK_INVALIDO",
+        "provedor retornou um link afiliado inválido",
+      );
+    }
+
+    atualizarLinkAfiliadoPorFonte(
+      produto.source_key,
+      produto.external_product_id,
+      linkGerado,
+    );
+    res.json({ sucesso: true, linkAfiliado: linkGerado });
+  } catch (erro) {
+    const msg = erro instanceof Error ? erro.message : String(erro);
+    enviarErro(res, 500, "ERRO_GERAR_LINK", `Falha ao gerar link afiliado: ${msg}`);
   }
 });
 

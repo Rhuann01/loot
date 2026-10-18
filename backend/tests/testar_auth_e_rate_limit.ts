@@ -21,6 +21,22 @@ try {
     "true",
     "CORS deve retornar access-control-allow-credentials: true",
   );
+  assert.equal(
+    resCors.headers.get("access-control-allow-origin"),
+    "http://localhost:5173",
+    "CORS deve retornar access-control-allow-origin para origem autorizada",
+  );
+
+  // 1c. CORS com origem não permitida deve ser rejeitado com 403
+  const resCorsInvalido = await api.req(
+    "/api/auth/me",
+    {
+      headers: { Origin: "http://malicioso.com" },
+    },
+    false,
+  );
+  assert.equal(resCorsInvalido.status, 403, "CORS deve recusar origem não autorizada com 403");
+  assert.equal((resCorsInvalido.json as any).error.code, "ORIGEM_NAO_AUTORIZADA");
 
   // 2. Login com senha incorreta deve retornar 401
   const resLoginInvalido = await api.req(

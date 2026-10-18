@@ -1,5 +1,6 @@
 import {
   atualizarPrecoProduto,
+  atualizarLinkAfiliadoPorFonte,
   buscarTentativaEnvioPorId,
   getConfig,
   iniciarEnvioManualIdempotente,
@@ -12,7 +13,11 @@ import {
 } from "../db/queries.js";
 import { executarEnvioProtegido } from "./dispatch.js";
 import { enviarProduto, montarMensagemDoProduto } from "./sender.js";
-import { temAffiliateProvider } from "../integrations/registry.js";
+import {
+  temAffiliateProvider,
+  getAffiliateProvider,
+} from "../integrations/registry.js";
+import type { IntegrationKey } from "../integrations/types.js";
 import {
   consultarOfertaShopeePorItem,
   decidirRecheca,
@@ -71,17 +76,38 @@ export async function reenviarManualIdempotente(
     if (!tentativaAtual) return "ambiguous";
     if (tentativaAtual.status !== "sending") return resultadoDaTentativa(tentativaAtual);
 
-    if (
+    let linkAfiliado = produto.link_afiliado;
+    const precisaGerarLink =
       temAffiliateProvider(produto.source_key) &&
-      (!produto.link_afiliado.trim() || produto.link_afiliado === produto.link_original)
-    ) {
-      marcarFalhaEnvio(
-        produto.id,
-        "Link afiliado ausente ou igual ao link original.",
-        tentativa.id,
-        true,
-      );
-      return "failed";
+      (!produto.link_afiliado.trim() ||
+        produto.link_afiliado === produto.link_original);
+
+    if (precisaGerarLink) {
+      try {
+        const linkOriginal = produto.link_original;
+        if (!linkOriginal) throw new Error("URL original do produto ausente");
+        const provider = getAffiliateProvider(
+          produto.source_key as IntegrationKey,
+        );
+        const linkGerado = await provider.generateLink(linkOriginal);
+
+        if (!linkGerado.trim() || linkGerado === linkOriginal) {
+          throw new Error("Link afiliado gerado é inválido ou igual ao original");
+        }
+
+        linkAfiliado = linkGerado;
+        atualizarLinkAfiliadoPorFonte(
+          produto.source_key,
+          produto.external_product_id,
+          linkAfiliado,
+        );
+      } catch (erro) {
+        const mensagemErro = `Falha ao gerar link afiliado: ${
+          erro instanceof Error ? erro.message : String(erro)
+        }`;
+        marcarFalhaEnvio(produto.id, mensagemErro, tentativa.id, true);
+        return "failed";
+      }
     }
 
     let precoAtualEnvio = produto.preco_atual;
@@ -147,7 +173,7 @@ export async function reenviarManualIdempotente(
         preco_atual: precoAtualEnvio,
         preco_original: precoOriginalEnvio,
         descontoPercentual: descontoEnvio,
-        link_afiliado: produto.link_afiliado,
+        link_afiliado: linkAfiliado,
         imagem_url: produto.imagem_url,
       };
       gravarSnapshotTentativa(tentativa.id, {

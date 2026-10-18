@@ -1517,7 +1517,7 @@ export function obterDadosDashboard(periodo: string = "7d"): DashboardData {
       `WITH RECURSIVE dias(d, step) AS (
          SELECT date('now', '-3 hours', '-6 days'), 0
          UNION ALL
-         SELECT date('now', '-3 hours', printf('+%d days', -6 + step + 1)), step + 1
+         SELECT date(d, '+1 day'), step + 1
          FROM dias WHERE step < 6
        )
        SELECT dias.d as data,
@@ -1657,7 +1657,7 @@ export function obterDadosDashboard(periodo: string = "7d"): DashboardData {
   ];
 
   // 7. recentActivities
-  const { items: atividades } = listarAtividades({ limit: 10 });
+  const { items: atividades } = listarAtividades({ limit: 20 });
   const recentActivities = atividades.map((a) => ({
     id: a.id,
     tipo: a.tipo,

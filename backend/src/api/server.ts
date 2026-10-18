@@ -15,16 +15,35 @@ const __dirname = path.dirname(__filename);
 export const app = express();
 app.set("trust proxy", 1);
 
-const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
-  .split(",")
-  .map((origem) => origem.trim())
-  .filter(Boolean);
-
 app.use(cors({
   origin: (origem, callback) => {
-    if (!origem || origensPermitidas.includes(origem)) {
+    if (!origem) {
       callback(null, true);
       return;
+    }
+
+    const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (origensPermitidas.includes(origem)) {
+      callback(null, true);
+      return;
+    }
+
+    const nodeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
+    const ehDev = nodeEnv === "development" || !process.env.NODE_ENV;
+    if (ehDev) {
+      try {
+        const url = new URL(origem);
+        if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+          callback(null, true);
+          return;
+        }
+      } catch {
+        // Ignora erro de parsing de URL
+      }
     }
 
     callback(new Error("origem não autorizada pelo CORS"));

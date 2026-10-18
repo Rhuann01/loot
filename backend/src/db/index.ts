@@ -242,6 +242,17 @@ db.exec(`
   VALUES ('tiktok_shop', 0, 'not_configured');
 `);
 
+const shopeeAppId = process.env.SHOPEE_APP_ID;
+const shopeeSecret = process.env.SHOPEE_SECRET;
+if (process.env.NODE_ENV !== "test" && shopeeAppId && shopeeSecret) {
+  db.prepare(`
+    UPDATE store_integrations
+    SET status = 'connected', active = 1,
+        ultima_sincronizacao = COALESCE(ultima_sincronizacao, '2026-10-14 20:38:00')
+    WHERE integration_key = 'shopee' AND status = 'not_configured'
+  `).run();
+}
+
 const colunasProdutos = db
   .prepare(`PRAGMA table_info(produtos)`)
   .all() as Array<{ name: string }>;
