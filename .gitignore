@@ -1,14 +1,54 @@
+# Dependências
 node_modules/
+package-lock.json.bak
+
+# Compilações de produção
 dist/
-backend/auth_info/
-backend/loot.db
-backend/.env
+dist-ssr/
 frontend/dist/
-EOF
-backend/docs/
+backend/dist/
+
+# Sessões e credenciais do WhatsApp (Baileys)
+auth_info/
+**/auth_info/
+
+# Banco de dados SQLite (arquivos locais e temporários WAL)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backend/loot.db*
+
+# Variáveis de ambiente sensíveis (mantém apenas os arquivos .example)
 .env
+.env.*
+!.env.example
+!**/.env.example
+!frontend/.env.development
+
+# Backups e temporários
+*.bak
+backend/*.bak
+*.tmp
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Sistema operacional e IDEs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Documentação interna e materiais de design
 AGENTS.md
 docs/
+backend/docs/
 scripts/
 Figma/
-backend/*.bak

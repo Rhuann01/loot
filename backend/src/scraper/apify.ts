@@ -1,10 +1,18 @@
 import "dotenv/config";
 import { ApifyClient } from "apify-client";
-import { limparProdutosAntigos, salvarProduto, setConfig } from "../db/queries.js";
+import { limparProdutosAntigos, salvarProduto, setConfig, getConfig } from "../db/queries.js";
 
-const client = new ApifyClient({
-  token: process.env.APIFY_API_TOKEN as string,
-});
+export function obterTokenApify(): string | undefined {
+  return getConfig("apify_api_token") || process.env.APIFY_API_TOKEN;
+}
+
+function obterClienteApify(): ApifyClient {
+  const token = obterTokenApify();
+  if (!token) {
+    throw new Error("APIFY_API_TOKEN não configurado");
+  }
+  return new ApifyClient({ token });
+}
 
 const ACTOR_ID = "karamelo/mercadolivre-scraper-brasil-portugues";
 const ACTOR_BUILD = process.env.APIFY_ACTOR_BUILD;
@@ -22,12 +30,11 @@ interface OfertaApify {
   precoAnterior: string;
   precoDiscount: string;
   imagemLink: string;
+  idPublicacao?: string;
 }
 
 export async function buscarOfertas(): Promise<OfertaApify[]> {
-  if (!process.env.APIFY_API_TOKEN) {
-    throw new Error("APIFY_API_TOKEN não configurado");
-  }
+  const client = obterClienteApify();
 
   let ultimoErro: unknown;
 
@@ -103,14 +110,21 @@ function erroApifyPodeSerRepetido(erro: unknown): boolean {
   return !permanente.some((termo) => mensagem.includes(termo));
 }
 
-function extrairDesconto(precoDiscount: string): number {
+export function extrairDesconto(precoDiscount: string): number {
   const match = precoDiscount.match(/(\d+)%/);
   return match ? Number(match[1]) : 0;
 }
 
-function extrairIdProduto(link: string): string {
-  const match = link.match(/MLB\d+/);
-  return match ? match[0] : "";
+export function extrairIdProduto(link: string, idPublicacao?: string): string {
+  if (typeof idPublicacao === "string" && idPublicacao.trim()) {
+    const limpo = idPublicacao.trim().replace(/-/g, "").toUpperCase();
+    if (/^MLB\d+$/i.test(limpo)) {
+      return limpo.toUpperCase();
+    }
+  }
+
+  const match = link.match(/MLB-?(\d+)/i);
+  return match ? `MLB${match[1]}` : "";
 }
 
 export async function processarESalvarOfertas() {
@@ -125,7 +139,10 @@ export async function processarESalvarOfertas() {
       .slice(0, MAX_PRODUTOS_POR_COLETA);
 
     for (const oferta of ofertasLimitadas) {
-      const idProduto = extrairIdProduto(oferta.zProdutoLink);
+      const idProduto = extrairIdProduto(
+        oferta.zProdutoLink,
+        (oferta as Partial<OfertaApify>).idPublicacao,
+      );
 
       if (!idProduto) continue;
 

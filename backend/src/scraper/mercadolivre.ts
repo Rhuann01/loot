@@ -4,4 +4,6 @@
 export {
   buscarOfertas,
   processarESalvarOfertas,
+  extrairIdProduto,
+  extrairDesconto,
 } from "./apify.js";

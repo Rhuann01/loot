@@ -15,41 +15,63 @@ const __dirname = path.dirname(__filename);
 export const app = express();
 app.set("trust proxy", 1);
 
-app.use(cors({
-  origin: (origem, callback) => {
-    if (!origem) {
-      callback(null, true);
-      return;
-    }
+const corsHandler = cors((req, callback) => {
+  const origem = (Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin) as string | undefined;
+  if (!origem) {
+    return callback(null, { origin: true, credentials: true });
+  }
 
-    const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
+  const origensPermitidas = (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 
-    if (origensPermitidas.includes(origem)) {
-      callback(null, true);
-      return;
+  if (origensPermitidas.includes(origem) || origensPermitidas.includes("*")) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  try {
+    const url = new URL(origem);
+    const hostReq = (Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host) as string | undefined;
+
+    // Same-origin (quando servido pelo mesmo domínio, host ou proxy reverso)
+    if (hostReq && (url.host === hostReq || url.hostname === hostReq.split(":")[0])) {
+      return callback(null, { origin: true, credentials: true });
     }
 
     const nodeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
     const ehDev = nodeEnv === "development" || !process.env.NODE_ENV;
-    if (ehDev) {
-      try {
-        const url = new URL(origem);
-        if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-          callback(null, true);
-          return;
-        }
-      } catch {
-        // Ignora erro de parsing de URL
-      }
+
+    // Em ambiente de desenvolvimento, portas locais são permitidas
+    if (ehDev && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return callback(null, { origin: true, credentials: true });
     }
 
-    callback(new Error("origem não autorizada pelo CORS"));
-  },
-  credentials: true,
-}));
+    // Túneis de teste e desenvolvimento público (Cloudflare Tunnel, ngrok, localtunnel)
+    if (
+      url.hostname.endsWith(".trycloudflare.com") ||
+      url.hostname.endsWith(".ngrok-free.app") ||
+      url.hostname.endsWith(".ngrok.io") ||
+      url.hostname.endsWith(".loca.lt")
+    ) {
+      return callback(null, { origin: true, credentials: true });
+    }
+
+    // Rede local privada (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    if (
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(url.hostname) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(url.hostname) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(url.hostname)
+    ) {
+      return callback(null, { origin: true, credentials: true });
+    }
+  } catch {
+    // Ignora erro de parsing de URL
+  }
+
+  callback(new Error("origem não autorizada pelo CORS"));
+});
+
 app.use(cookieParser());
 app.use(express.json());
 
@@ -63,12 +85,19 @@ function resolverDistFrontend(): string | null {
   return candidatos.find((caminho) => fs.existsSync(caminho)) ?? null;
 }
 
-app.use("/api", generalLimiter);
-app.use("/api", routes);
-
+// 1. Arquivos estáticos do frontend (não bloqueados por CORS)
 const distFrontend = resolverDistFrontend();
 if (distFrontend) {
   app.use(express.static(distFrontend));
+}
+
+// 2. Rotas da API (com CORS e Rate Limiting)
+app.use("/api", corsHandler);
+app.use("/api", generalLimiter);
+app.use("/api", routes);
+
+// 3. Fallback SPA para navegação do frontend
+if (distFrontend) {
   app.use((req, res, next) => {
     if (req.method === "GET" && !req.path.startsWith("/api")) {
       return res.sendFile(path.join(distFrontend, "index.html"));

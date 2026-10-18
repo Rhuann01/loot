@@ -34,14 +34,15 @@ interface SettingsData {
 export default function Configuracoes() {
   const [salvando, setSalvando] = useState(false);
   const [testandoWhatsapp, setTestandoWhatsapp] = useState(false);
+  const [carregando, setCarregando] = useState(true);
 
   // Form states
   const [autoEnvioAtivo, setAutoEnvioAtivo] = useState(true);
   const [frequencia, setFrequencia] = useState("Diária");
-  const [horariosSelecionados, setHorariosSelecionados] = useState<string[]>(["12:00", "18:00"]);
+  const [horariosSelecionados, setHorariosSelecionados] = useState<string[]>([]);
   const [seletorHorariosAberto, setSeletorHorariosAberto] = useState(false);
   const [novoHorarioInput, setNovoHorarioInput] = useState("");
-  const [limiteDiarioInput, setLimiteDiarioInput] = useState("12 promoções");
+  const [limiteDiarioInput, setLimiteDiarioInput] = useState("");
 
   // Horários predefinidos comuns
   const HORARIOS_PREDEFINIDOS = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"];
@@ -118,9 +119,9 @@ export default function Configuracoes() {
     numero: string | null;
     destino: string | null;
   }>({
-    status: "connected",
-    numero: "+55 (11) •••••-4821",
-    destino: "Ofertas do dia",
+    status: "disconnected",
+    numero: null,
+    destino: null,
   });
 
   const [bancoTipo, setBancoTipo] = useState("SQLite");
@@ -136,25 +137,31 @@ export default function Configuracoes() {
 
         if (scheduler.horarios && scheduler.horarios.length > 0) {
           setHorariosSelecionados([...scheduler.horarios].sort());
+        } else {
+          setHorariosSelecionados([]);
         }
 
         if (scheduler.limiteDiario) {
           const l = Math.min(scheduler.limiteDiario, 12);
           setLimiteDiarioInput(`${l} promoções`);
+        } else {
+          setLimiteDiarioInput("");
         }
 
         if (whatsapp) {
-          let numeroFormatado = "+55 (11) •••••-4821";
+          let numeroFormatado: string | null = null;
           if (whatsapp.numero) {
             const limpo = whatsapp.numero.replace(/\D/g, "");
             const final4 = limpo.slice(-4);
-            numeroFormatado = `+55 (11) •••••-${final4}`;
+            const ddd = limpo.length >= 4 ? limpo.slice(2, 4) : "11";
+            numeroFormatado = `+55 (${ddd}) •••••-${final4}`;
           }
 
+          const nomeDestino = whatsapp.destino?.nome?.trim();
           setWhatsappInfo({
             status: whatsapp.status,
             numero: numeroFormatado,
-            destino: whatsapp.destino?.nome || "Ofertas do dia",
+            destino: nomeDestino || (whatsapp.destino?.id ? "Grupo configurado" : null),
           });
         }
 
@@ -164,6 +171,8 @@ export default function Configuracoes() {
       }
     } catch (err) {
       console.error("Falha ao carregar configurações:", err);
+    } finally {
+      setCarregando(false);
     }
   };
 
@@ -303,7 +312,7 @@ export default function Configuracoes() {
             className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-xs text-zinc-900 cursor-pointer hover:border-zinc-300 transition-colors"
           >
             <span className="font-medium text-zinc-900">
-              {formatarHorariosTexto(horariosSelecionados)}
+              {carregando ? "Carregando..." : formatarHorariosTexto(horariosSelecionados)}
             </span>
             <Clock className="size-4 text-zinc-400 shrink-0" />
           </div>
@@ -370,7 +379,7 @@ export default function Configuracoes() {
               aria-label="Limite diário de promoções"
               value={limiteDiarioInput}
               onChange={(e) => handleLimiteChange(e.target.value)}
-              placeholder="12 promoções"
+              placeholder={carregando ? "Carregando..." : "12 promoções"}
               className="w-full bg-transparent focus:outline-none text-zinc-900 placeholder:text-zinc-400"
             />
           </div>
@@ -406,7 +415,11 @@ export default function Configuracoes() {
       <section className="mt-5 bg-white rounded-2xl p-5 border border-zinc-200/80 shadow-xs flex flex-col gap-3.5">
         <div className="flex flex-col gap-2">
           <h2 className="text-lg font-bold text-zinc-900">WhatsApp</h2>
-          {whatsappInfo.status === "connected" ? (
+          {carregando ? (
+            <span className="bg-zinc-100 text-zinc-400 text-xs font-medium px-2.5 py-1 rounded-md w-fit">
+              Verificando...
+            </span>
+          ) : whatsappInfo.status === "connected" ? (
             <span className="bg-emerald-50 text-emerald-600 text-xs font-semibold px-2.5 py-1 rounded-md w-fit">
               Conectado
             </span>
@@ -421,7 +434,7 @@ export default function Configuracoes() {
         <div className="flex items-center justify-between text-xs pt-1 border-t border-zinc-100">
           <span className="text-zinc-500">Número</span>
           <span className="font-semibold text-zinc-900">
-            {whatsappInfo.numero}
+            {carregando ? "Carregando..." : (whatsappInfo.numero || "Não informado")}
           </span>
         </div>
 
@@ -429,7 +442,7 @@ export default function Configuracoes() {
         <div className="flex items-center justify-between text-xs">
           <span className="text-zinc-500">Conexão</span>
           <span className="font-semibold text-zinc-900 font-mono">
-            ••••••••7b21
+            {carregando ? "Verificando..." : (whatsappInfo.status === "connected" ? "Ativa" : "Desconectada")}
           </span>
         </div>
 
@@ -437,7 +450,7 @@ export default function Configuracoes() {
         <div className="flex items-center justify-between text-xs">
           <span className="text-zinc-500">Destino padrão</span>
           <span className="font-semibold text-zinc-900">
-            {whatsappInfo.destino}
+            {carregando ? "Carregando..." : (whatsappInfo.destino || "Não configurado")}
           </span>
         </div>
 

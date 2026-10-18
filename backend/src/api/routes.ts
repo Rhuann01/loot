@@ -1515,43 +1515,59 @@ router.post("/sends/:attemptId/retry", sendsLimiter, async (req, res) => {
  * Cookie e csrfToken são tratados como segredos — não são logados.
  */
 router.post("/affiliate/ml/config", (req, res) => {
-  const { cookie, csrfToken, tag } = req.body as {
+  const { cookie, csrfToken, tag, apifyToken } = req.body as {
     cookie?: string;
     csrfToken?: string;
     tag?: string;
+    apifyToken?: string;
   };
 
-  if (!cookie || !csrfToken || !tag) {
+  const temCamposSessao = Boolean(cookie || csrfToken || tag);
+  const temApify = Boolean(apifyToken && apifyToken.trim());
+
+  if (!temCamposSessao && !temApify) {
     return enviarErro(
       res,
       400,
       "PARAMETRO_INVALIDO",
-      "cookie, csrfToken e tag são obrigatórios",
+      "Pelo menos uma configuração (sessão ou token Apify) deve ser fornecida",
     );
   }
 
-  configurarSessaoML(cookie, csrfToken, tag);
-  res.json({ sucesso: true, mensagem: "Sessão do Mercado Livre configurada." });
+  if (temCamposSessao && (!cookie || !csrfToken || !tag)) {
+    return enviarErro(
+      res,
+      400,
+      "PARAMETRO_INVALIDO",
+      "cookie, csrfToken e tag são obrigatórios para atualizar a sessão",
+    );
+  }
+
+  if (cookie && csrfToken && tag) {
+    configurarSessaoML(cookie, csrfToken, tag);
+  }
+
+  if (temApify && !apifyToken!.includes("*")) {
+    setConfig("apify_api_token", apifyToken!.trim());
+  }
+
+  res.json({ sucesso: true, mensagem: "Configurações do Mercado Livre salvas." });
 });
 
 /**
  * GET /affiliate/ml/config
- * Retorna o status da sessão do Mercado Livre sem expor dados confidenciais.
+ * Retorna o status da sessão do Mercado Livre e do token da Apify sem expor dados confidenciais.
  */
 router.get("/affiliate/ml/config", (_req, res) => {
   const sessao = buscarSessaoAfiliado("mercadolivre");
-  if (!sessao) {
-    return res.json({
-      configurado: false,
-      tag: null,
-      atualizadoEm: null,
-    });
-  }
+  const apifyRaw = getConfig("apify_api_token") || process.env.APIFY_API_TOKEN || null;
 
   res.json({
-    configurado: true,
-    tag: sessao.tag,
-    atualizadoEm: sessao.atualizado_em,
+    configurado: Boolean(sessao),
+    tag: sessao?.tag ?? null,
+    atualizadoEm: sessao?.atualizado_em ?? null,
+    apifyTokenConfigurado: Boolean(apifyRaw),
+    apifyToken: mascararSecret(apifyRaw),
   });
 });
 

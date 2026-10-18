@@ -1,11 +1,11 @@
 # Exemplo de configuração Caddy para o Loot em produção
 # O Caddy atua como proxy reverso com HTTPS automático via Let's Encrypt / ZeroSSL,
-# servindo o frontend estático e encaminhando requisições de API para o backend Node.js.
+# encaminhando as requisições para o backend Node.js (que já serve tanto a API quanto o frontend compilado).
 #
 # Como usar:
 # 1. Substitua "seu-dominio.com.br" pelo domínio real da aplicação.
-# 2. Certifique-se de que o backend Node.js está em execução na porta 3000.
-# 3. Certifique-se de que o build do frontend foi gerado em ./frontend/dist (npm run build).
+# 2. Certifique-se de que o backend Node.js está em execução na porta 3001 (PORT=3001).
+# 3. Certifique-se de que o build do frontend foi gerado em ./frontend/dist (npm run build no frontend).
 # 4. Inicie o Caddy: caddy run --config Caddyfile.exemplo
 
 seu-dominio.com.br {
@@ -26,24 +26,16 @@ seu-dominio.com.br {
         -Server
     }
 
-    # Roteamento de rotas da API e SSE do WhatsApp para o backend Node.js
-    handle /api/* {
-        reverse_proxy localhost:3000 {
-            # Repassa o IP real do cliente para o express-rate-limit
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            header_up Host {host}
+    # Proxy reverso para o Express (porta 3001)
+    # O Express já serve a API (/api/*) e os arquivos estáticos do frontend (frontend/dist)
+    reverse_proxy localhost:3001 {
+        # Repassa o IP real do cliente para o rate-limiting do backend
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Host {host}
 
-            # Configurações para Server-Sent Events (SSE - /api/whatsapp/events)
-            flush_interval -1
-        }
-    }
-
-    # Frontend Single Page Application (SPA)
-    handle {
-        root * /caminho/para/Loot/frontend/dist
-        try_files {path} /index.html
-        file_server
+        # Configuração para Server-Sent Events (SSE - /api/whatsapp/events) sem buffering
+        flush_interval -1
     }
 }

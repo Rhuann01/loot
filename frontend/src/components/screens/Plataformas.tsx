@@ -37,6 +37,8 @@ interface MlConfig {
   configurado: boolean;
   tag: string | null;
   atualizadoEm: string | null;
+  apifyTokenConfigurado?: boolean;
+  apifyToken?: string | null;
 }
 
 function formatarMoeda(valor: number | string | null | undefined): string {
@@ -115,6 +117,7 @@ export default function Plataformas() {
   const [mlCookie, setMlCookie] = useState("");
   const [mlCsrfToken, setMlCsrfToken] = useState("");
   const [mlTag, setMlTag] = useState("");
+  const [mlApifyToken, setMlApifyToken] = useState("");
   const [salvandoMl, setSalvandoMl] = useState(false);
 
   const mostrarToast = (msg: string, tipo?: "success" | "error" | "info") => {
@@ -243,6 +246,7 @@ export default function Plataformas() {
         if (res.data.tag) {
           setMlTag(res.data.tag);
         }
+        setMlApifyToken("");
       }
     } catch (err) {
       console.error("Falha ao buscar config do Mercado Livre:", err);
@@ -251,25 +255,40 @@ export default function Plataformas() {
 
   // Salvar credenciais do Mercado Livre
   const handleSalvarMlConfig = async () => {
-    if (!mlCookie.trim() || !mlCsrfToken.trim() || !mlTag.trim()) {
+    const temSessao = Boolean(mlCookie.trim() || mlCsrfToken.trim() || mlTag.trim());
+    const temApify = Boolean(mlApifyToken.trim());
+
+    if (!temSessao && !temApify) {
+      mostrarToast("Preencha ao menos uma configuração para salvar.", "error");
+      return;
+    }
+
+    if (temSessao && (!mlCookie.trim() || !mlCsrfToken.trim() || !mlTag.trim())) {
       mostrarToast("Preencha Cookie, Token CSRF e Tag de Afiliado.", "error");
       return;
     }
 
     setSalvandoMl(true);
     try {
-      const res = await api.post("/api/affiliate/ml/config", {
-        cookie: mlCookie.trim(),
-        csrfToken: mlCsrfToken.trim(),
-        tag: mlTag.trim(),
-      });
+      const payload: Record<string, string> = {};
+      if (temSessao) {
+        payload.cookie = mlCookie.trim();
+        payload.csrfToken = mlCsrfToken.trim();
+        payload.tag = mlTag.trim();
+      }
+      if (temApify) {
+        payload.apifyToken = mlApifyToken.trim();
+      }
+
+      const res = await api.post("/api/affiliate/ml/config", payload);
       if (res.data?.sucesso) {
         mostrarToast(
-          "Sessão do Mercado Livre configurada com sucesso!",
+          "Configurações do Mercado Livre salvas com sucesso!",
           "success",
         );
         setMlCookie("");
         setMlCsrfToken("");
+        setMlApifyToken("");
         await carregarMlConfig();
         await carregarPlataformas();
         setModalMlAberto(false);
@@ -791,6 +810,38 @@ export default function Plataformas() {
                 rows={3}
                 className="w-full text-xs px-3.5 py-2 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-zinc-900 bg-white font-mono resize-none"
               />
+            </div>
+
+            {/* Campo Token da API Apify */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-zinc-700">
+                  Token da API Apify (Scraper)
+                </label>
+                {mlConfig?.apifyTokenConfigurado ? (
+                  <span className="bg-emerald-50 text-emerald-600 text-[10px] font-semibold px-1.5 py-0.5 rounded">
+                    Configurado
+                  </span>
+                ) : (
+                  <span className="bg-zinc-100 text-zinc-500 text-[10px] font-medium px-1.5 py-0.5 rounded">
+                    Pendente
+                  </span>
+                )}
+              </div>
+              <input
+                type="password"
+                value={mlApifyToken}
+                onChange={(e) => setMlApifyToken(e.target.value)}
+                placeholder={
+                  mlConfig?.apifyTokenConfigurado
+                    ? "Deixe em branco para manter o token atual"
+                    : "Insira o token Apify (apify_api_...)"
+                }
+                className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-600 text-zinc-900 bg-white"
+              />
+              <span className="text-[10px] text-zinc-400">
+                Necessário para o robô coletar ofertas automáticas do Mercado Livre.
+              </span>
             </div>
 
             {mlConfig?.atualizadoEm && (
