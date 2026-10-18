@@ -2,6 +2,7 @@ import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import { coletores, getAffiliateProvider, temAffiliateProvider } from "../integrations/registry.js";
 import type { IntegrationKey } from "../integrations/types.js";
+import { TIMEZONE } from "../lib/time.js";
 import {
   getConfig,
   marcarComoEnviado,
@@ -368,6 +369,10 @@ export function recarregarScheduler() {
       } finally {
         execucaoEmAndamento = false;
       }
+    },
+    {
+      timezone: TIMEZONE,
+      missedExecutionTolerance: 60_000,
     }),
   );
 }

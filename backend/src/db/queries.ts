@@ -5,6 +5,7 @@ import {
   sqlDiaBrasilia,
   calcularProximoEnvio,
   OFFSET_SQLITE_BRASILIA,
+  formatarDataIso,
 } from "../lib/time.js";
 
 export interface Produto {
@@ -261,7 +262,7 @@ export function getMelhoresDescontos(limite: number): Produto[] {
 function obterCriteriosDaFila() {
   const descontoMinimo = Math.max(
     0,
-    Number(getConfig("desconto_minimo_global") ?? 20) || 0,
+    Number(getConfig("desconto_minimo_global") ?? 10) || 0,
   );
   const janelaDias = Math.max(
     1,
@@ -1667,7 +1668,7 @@ export function obterDadosDashboard(periodo: string = "7d"): DashboardData {
     tentativaId: a.tentativa_id,
     titulo: a.titulo,
     detalhe: a.detalhe,
-    criadoEm: a.criado_em,
+    criadoEm: formatarDataIso(a.criado_em) ?? a.criado_em,
   }));
 
   return {

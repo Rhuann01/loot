@@ -91,9 +91,14 @@ function formatarPreco(val: string | number | null | undefined): string {
   return str;
 }
 
+function parseDataUtc(dataStr: string): Date {
+  const s = dataStr.includes(" ") && !dataStr.includes("T") ? dataStr.replace(" ", "T") + "Z" : dataStr;
+  return new Date(s);
+}
+
 function formatarDataHora(dataStr: string): string {
   try {
-    const d = new Date(dataStr);
+    const d = parseDataUtc(dataStr);
     if (isNaN(d.getTime())) return dataStr;
     const dia = String(d.getDate()).padStart(2, "0");
     const mes = String(d.getMonth() + 1).padStart(2, "0");
@@ -107,7 +112,7 @@ function formatarDataHora(dataStr: string): string {
 
 function formatarDataCompleta(dataStr: string): string {
   try {
-    const d = new Date(dataStr);
+    const d = parseDataUtc(dataStr);
     if (isNaN(d.getTime())) return dataStr;
     const dia = String(d.getDate()).padStart(2, "0");
     const mes = String(d.getMonth() + 1).padStart(2, "0");

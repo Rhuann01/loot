@@ -53,7 +53,7 @@ import {
   type TentativaEnvio,
   type Produto,
 } from "../db/queries.js";
-import { calcularProximoEnvio } from "../lib/time.js";
+import { calcularProximoEnvio, formatarDataIso } from "../lib/time.js";
 import {
   normalizarUrlShopee,
   resolverLinkShopee,
@@ -126,7 +126,7 @@ function produtoParaResposta(p: ProdutoComPlataforma) {
     tentativas: p.tentativas_envio,
     ultimoErro: p.ultimo_erro_envio,
     ofertaExpiraEm: p.oferta_expira_em,
-    criadoEm: p.criado_em,
+    criadoEm: formatarDataIso(p.criado_em),
     comissao: {
       valor: valorComissao,
       disponivel: valorComissao !== null && p.source_key === "shopee",
@@ -142,8 +142,8 @@ function tentativaParaResposta(t: TentativaEnvio) {
     status: t.status,
     needsReview: t.status === "ambiguous",
     motivo: t.motivo,
-    iniciadoEm: t.iniciado_em,
-    finalizadoEm: t.finalizado_em,
+    iniciadoEm: formatarDataIso(t.iniciado_em),
+    finalizadoEm: formatarDataIso(t.finalizado_em),
     mensagem: {
       disponivel: Boolean(t.mensagem_snapshot),
       texto: t.mensagem_snapshot ?? null,
@@ -440,7 +440,7 @@ router.get("/activities", (req, res) => {
         tentativaId: a.tentativa_id,
         titulo: a.titulo,
         detalhe: a.detalhe,
-        criadoEm: a.criado_em,
+        criadoEm: formatarDataIso(a.criado_em),
       })),
       page,
       limit,

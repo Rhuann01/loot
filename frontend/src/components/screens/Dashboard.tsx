@@ -115,7 +115,10 @@ const Dashboard = () => {
           }
           if (data.automation.proximoEnvio) {
             try {
-              const d = new Date(data.automation.proximoEnvio);
+              const rawData = data.automation.proximoEnvio.includes(" ") && !data.automation.proximoEnvio.includes("T")
+                ? data.automation.proximoEnvio.replace(" ", "T") + "Z"
+                : data.automation.proximoEnvio;
+              const d = new Date(rawData);
               if (!isNaN(d.getTime())) {
                 const hh = String(d.getHours()).padStart(2, "0");
                 const mm = String(d.getMinutes()).padStart(2, "0");
@@ -243,7 +246,10 @@ const Dashboard = () => {
 
               let horario = "--:--";
               try {
-                const dt = new Date(a.criadoEm);
+                const rawData = a.criadoEm.includes(" ") && !a.criadoEm.includes("T")
+                  ? a.criadoEm.replace(" ", "T") + "Z"
+                  : a.criadoEm;
+                const dt = new Date(rawData);
                 if (!isNaN(dt.getTime())) {
                   horario = `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
                 }

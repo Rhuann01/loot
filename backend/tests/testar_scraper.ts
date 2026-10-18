@@ -39,6 +39,19 @@ assert.equal(
   "Deve normalizar idPublicacao com hífen",
 );
 
+assert.equal(
+  extrairIdProduto("https://produto.mercadolivre.com.br/outro-link", "MLBU4266139499"),
+  "MLBU4266139499",
+  "Deve aceitar idPublicacao com prefixo MLBU",
+);
+assert.equal(
+  extrairIdProduto(
+    "https://www.mercadolivre.com.br/ar-condicionado-hw/up/MLBU4266139499?pdp_filters=deal%3AMLB779362-1",
+  ),
+  "MLBU4266139499",
+  "Não deve extrair o deal id da query string",
+);
+
 // 5. Links inválidos retornam string vazia
 assert.equal(extrairIdProduto("https://mercadolivre.com.br/sem-id"), "");
 assert.equal(extrairIdProduto(""), "");
@@ -48,6 +61,7 @@ assert.equal(extrairDesconto("60% OFF"), 60);
 assert.equal(extrairDesconto("22%"), 22);
 assert.equal(extrairDesconto("Sem desconto"), 0);
 assert.equal(extrairDesconto(""), 0);
+assert.equal(extrairDesconto(undefined, "80", "100"), 20);
 
 console.log("Resultado: testes do scraper do Mercado Livre passaram");
 

@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Wifi,
   RotateCw,
+  X,
 } from "lucide-react";
 import { api } from "../../services/api";
 import { Switch } from "../ui/switch";
@@ -45,7 +46,7 @@ export default function Configuracoes() {
   const [limiteDiarioInput, setLimiteDiarioInput] = useState("");
 
   // Horários predefinidos comuns
-  const HORARIOS_PREDEFINIDOS = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"];
+  const HORARIOS_PREDEFINIDOS = ["05:00", "08:00", "10:00", "12:00", "14:00", "15:00", "16:00", "18:00", "20:00", "22:00"];
 
   // Formatar horários para exibição (ex: "12:00 e 18:00")
   const formatarHorariosTexto = (horarios: string[]): string => {
@@ -319,52 +320,81 @@ export default function Configuracoes() {
 
           {/* Painel Seletor de Horários */}
           {seletorHorariosAberto && (
-            <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200 flex flex-col gap-3 animate-in fade-in slide-in-from-top-1 mt-1">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] font-semibold text-zinc-700">
-                  Horários de envio (toque para ativar/desativar):
-                </span>
-                <span className="text-[10px] text-zinc-400">
-                  Ative até 4 horários diários para os disparos automáticos.
-                </span>
-              </div>
+            <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200 flex flex-col gap-3.5 animate-in fade-in slide-in-from-top-1 mt-1">
+              {/* Horários selecionados */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-zinc-700">
+                    Horários configurados ({horariosSelecionados.length}/4):
+                  </span>
+                  <span className="text-[10px] text-zinc-400">
+                    Toque no × para remover
+                  </span>
+                </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                {HORARIOS_PREDEFINIDOS.map((hora) => {
-                  const ativo = horariosSelecionados.includes(hora);
-                  return (
+                <div className="flex flex-wrap gap-1.5">
+                  {horariosSelecionados.map((hora) => (
                     <button
-                      key={hora}
+                      key={`ativo-${hora}`}
                       type="button"
                       onClick={() => toggleHorario(hora)}
-                      className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                        ativo
-                          ? "bg-indigo-600 text-white shadow-xs"
-                          : "bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-100"
-                      }`}
+                      className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg font-medium bg-indigo-600 text-white shadow-xs hover:bg-indigo-700 transition-all cursor-pointer"
+                      title={`Remover ${hora}`}
                     >
-                      {hora}
+                      <span>{hora}</span>
+                      <X className="size-3 text-white/80 hover:text-white" />
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
+              </div>
+
+              {/* Sugestões rápidas */}
+              <div className="pt-2.5 border-t border-zinc-200/80 flex flex-col gap-1.5">
+                <span className="text-[11px] font-semibold text-zinc-700">
+                  Sugestões rápidas:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {HORARIOS_PREDEFINIDOS.map((hora) => {
+                    const ativo = horariosSelecionados.includes(hora);
+                    return (
+                      <button
+                        key={hora}
+                        type="button"
+                        onClick={() => toggleHorario(hora)}
+                        className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
+                          ativo
+                            ? "bg-indigo-100 text-indigo-700 border border-indigo-300 font-semibold"
+                            : "bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-100"
+                        }`}
+                      >
+                        {hora} {ativo ? "✓" : "+"}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Adicionar horário personalizado */}
-              <div className="pt-2 border-t border-zinc-200 flex items-center gap-2">
-                <input
-                  type="time"
-                  value={novoHorarioInput}
-                  onChange={(e) => setNovoHorarioInput(e.target.value)}
-                  className="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                />
-                <button
-                  type="button"
-                  disabled={!novoHorarioInput}
-                  onClick={handleAdicionarHorarioCustom}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 disabled:opacity-40 cursor-pointer"
-                >
-                  Adicionar
-                </button>
+              <div className="pt-2.5 border-t border-zinc-200/80 flex flex-col gap-1.5">
+                <span className="text-[11px] font-semibold text-zinc-700">
+                  Outro horário:
+                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    value={novoHorarioInput}
+                    onChange={(e) => setNovoHorarioInput(e.target.value)}
+                    className="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                  <button
+                    type="button"
+                    disabled={!novoHorarioInput}
+                    onClick={handleAdicionarHorarioCustom}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 disabled:opacity-40 cursor-pointer"
+                  >
+                    Adicionar
+                  </button>
+                </div>
               </div>
             </div>
           )}

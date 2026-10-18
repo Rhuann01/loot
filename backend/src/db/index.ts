@@ -282,7 +282,7 @@ db.exec(`
 const defaults: Record<string, string> = {
   auto_envio_ativo: "true",
   limite_diario: "12",
-  desconto_minimo_global: "20",
+  desconto_minimo_global: "10",
   horarios_envio: JSON.stringify(["05:00", "12:00", "15:00", "20:00"]),
   quantidade_por_execucao: "3",
   janela_fallback_dias: "3",

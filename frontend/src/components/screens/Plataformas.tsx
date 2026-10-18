@@ -55,7 +55,8 @@ function formatarMoeda(valor: number | string | null | undefined): string {
 function formatarDataRelativa(dataStr: string | null | undefined): string {
   if (!dataStr) return "Não disponível";
   try {
-    const d = new Date(dataStr);
+    const rawData = dataStr.includes(" ") && !dataStr.includes("T") ? dataStr.replace(" ", "T") + "Z" : dataStr;
+    const d = new Date(rawData);
     if (isNaN(d.getTime())) return dataStr;
 
     const agora = new Date();

@@ -19,16 +19,16 @@ const ACTOR_BUILD = process.env.APIFY_ACTOR_BUILD;
 const COLLECTION_TIMEOUT_SECS = 180;
 const COLLECTION_WAIT_SECS = 240;
 const MAX_PRODUTOS_POR_COLETA = Math.min(
-  20,
-  Math.max(1, Number(process.env.APIFY_MAX_PRODUCTS ?? 20) || 20),
+  50,
+  Math.max(1, Number(process.env.APIFY_MAX_PRODUCTS ?? 24) || 24),
 );
 
 interface OfertaApify {
   zProdutoLink: string;
   eTituloProduto: string;
   novoPreco: string;
-  precoAnterior: string;
-  precoDiscount: string;
+  precoAnterior?: string;
+  precoDiscount?: string;
   imagemLink: string;
   idPublicacao?: string;
 }
@@ -38,6 +38,11 @@ export async function buscarOfertas(): Promise<OfertaApify[]> {
 
   let ultimoErro: unknown;
 
+  const maxPages = Math.min(
+    10,
+    Math.max(1, Number(process.env.APIFY_MAX_PAGES_OFERTAS ?? 4) || 4),
+  );
+
   // Uma única tentativa adicional. A frequência normal de coleta não muda.
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
@@ -45,7 +50,7 @@ export async function buscarOfertas(): Promise<OfertaApify[]> {
         {
           keyword: "ofertas",
           scrapeOfertas: true,
-          maxPagesOfertas: 1,
+          maxPagesOfertas: maxPages,
           promoted: false,
         },
         {
@@ -68,8 +73,6 @@ export async function buscarOfertas(): Promise<OfertaApify[]> {
           typeof oferta.zProdutoLink === "string" &&
           typeof oferta.eTituloProduto === "string" &&
           typeof oferta.novoPreco === "string" &&
-          typeof oferta.precoAnterior === "string" &&
-          typeof oferta.precoDiscount === "string" &&
           typeof oferta.imagemLink === "string"
         );
       });
@@ -110,21 +113,41 @@ function erroApifyPodeSerRepetido(erro: unknown): boolean {
   return !permanente.some((termo) => mensagem.includes(termo));
 }
 
-export function extrairDesconto(precoDiscount: string): number {
-  const match = precoDiscount.match(/(\d+)%/);
-  return match ? Number(match[1]) : 0;
+export function extrairDesconto(
+  precoDiscount?: string,
+  novoPreco?: string,
+  precoAnterior?: string,
+): number {
+  if (typeof precoDiscount === "string") {
+    const match = precoDiscount.match(/(\d+)%/);
+    if (match) return Number(match[1]);
+  }
+  if (typeof precoAnterior === "string" && typeof novoPreco === "string") {
+    const limpar = (v: string) =>
+      Number(v.replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, ""));
+    const anterior = limpar(precoAnterior);
+    const atual = limpar(novoPreco);
+    if (anterior > 0 && atual > 0 && anterior > atual) {
+      return Math.round(((anterior - atual) / anterior) * 100);
+    }
+  }
+  return 0;
 }
 
 export function extrairIdProduto(link: string, idPublicacao?: string): string {
   if (typeof idPublicacao === "string" && idPublicacao.trim()) {
     const limpo = idPublicacao.trim().replace(/-/g, "").toUpperCase();
-    if (/^MLB\d+$/i.test(limpo)) {
-      return limpo.toUpperCase();
+    if (/^MLB[A-Z0-9]*\d+$/i.test(limpo)) {
+      return limpo;
     }
   }
 
-  const match = link.match(/MLB-?(\d+)/i);
-  return match ? `MLB${match[1]}` : "";
+  const urlLimpa = link.split("?")[0] || "";
+  const match = urlLimpa.match(/MLB(U)?-?(\d+)/i) || link.match(/MLB(U)?-?(\d+)/i);
+  if (!match) return "";
+  const u = match[1] ? "U" : "";
+  const nums = match[2];
+  return `MLB${u}${nums}`;
 }
 
 export async function processarESalvarOfertas() {
@@ -135,7 +158,11 @@ export async function processarESalvarOfertas() {
     let salvas = 0;
 
     const ofertasLimitadas = ofertas
-      .sort((a, b) => extrairDesconto(b.precoDiscount) - extrairDesconto(a.precoDiscount))
+      .sort(
+        (a, b) =>
+          extrairDesconto(b.precoDiscount, b.novoPreco, b.precoAnterior) -
+          extrairDesconto(a.precoDiscount, a.novoPreco, a.precoAnterior),
+      )
       .slice(0, MAX_PRODUTOS_POR_COLETA);
 
     for (const oferta of ofertasLimitadas) {
@@ -146,13 +173,19 @@ export async function processarESalvarOfertas() {
 
       if (!idProduto) continue;
 
+      const desconto = extrairDesconto(
+        oferta.precoDiscount,
+        oferta.novoPreco,
+        oferta.precoAnterior,
+      );
+
       salvarProduto({
         source_key: "mercado_livre",
         external_product_id: idProduto,
         nome: oferta.eTituloProduto,
         preco_atual: oferta.novoPreco,
         preco_original: oferta.precoAnterior,
-        desconto_percentual: extrairDesconto(oferta.precoDiscount),
+        desconto_percentual: desconto,
         imagem_url: oferta.imagemLink,
         link_original: oferta.zProdutoLink,
         link_afiliado: oferta.zProdutoLink,

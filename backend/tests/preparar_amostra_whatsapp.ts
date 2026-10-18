@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { buscarOfertas } from "../src/scraper/mercadolivre.js";
+import { buscarOfertas, extrairDesconto } from "../src/scraper/mercadolivre.js";
 import { gerarLinkAfiliado } from "../src/affiliate/mercadolivre/provider.js";
 import {
   buscarProdutoPorCodigoML,
@@ -72,7 +72,11 @@ for (const oferta of selecionadas) {
     nome: oferta.eTituloProduto,
     preco_atual: oferta.novoPreco,
     preco_original: oferta.precoAnterior,
-    desconto_percentual: Number(oferta.precoDiscount.match(/(\d+)%/)?.[1] ?? 0),
+    desconto_percentual: extrairDesconto(
+      oferta.precoDiscount,
+      oferta.novoPreco,
+      oferta.precoAnterior,
+    ),
     imagem_url: oferta.imagemLink,
     link_original: oferta.zProdutoLink,
     link_afiliado: linkAfiliado,

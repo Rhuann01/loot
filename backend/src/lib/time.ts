@@ -45,3 +45,16 @@ export function calcularProximoEnvio(
   const diaStr = String(dia).padStart(2, "0");
   return `${ano}-${mesStr}-${diaStr}T${horarioEscolhido}:00-03:00`;
 }
+
+export function formatarDataIso(data: string | null | undefined): string | null {
+  if (!data) return null;
+  const limpa = data.trim();
+  if (!limpa) return null;
+  if (limpa.includes("T") && (limpa.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(limpa))) {
+    return limpa;
+  }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(limpa)) {
+    return limpa.replace(" ", "T") + "Z";
+  }
+  return limpa;
+}
