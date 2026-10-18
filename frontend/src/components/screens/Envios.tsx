@@ -72,6 +72,7 @@ export default function Envios() {
     precoAtual: string,
     precoOriginal: string | null,
     link: string,
+    descontoPercentual?: number | null,
   ): string => {
     const linhas: string[] = [];
     if (nome) {
@@ -79,12 +80,31 @@ export default function Envios() {
       linhas.push("");
     }
 
-    if (precoOriginal && precoOriginal.trim()) {
-      const origFormatado = formatarPrecoMoeda(precoOriginal.trim());
+    let orig = precoOriginal;
+    let desc = calcularDesconto(precoOriginal ?? "", precoAtual);
+
+    if (
+      (!orig || !orig.trim()) &&
+      descontoPercentual &&
+      descontoPercentual > 0 &&
+      descontoPercentual < 100
+    ) {
+      const atuNum = Number(precoAtual.replace(/\./g, "").replace(",", "."));
+      if (atuNum > 0) {
+        const origNum = atuNum / (1 - descontoPercentual / 100);
+        orig = origNum.toLocaleString("pt-BR", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        desc = Math.round(descontoPercentual);
+      }
+    }
+
+    if (orig && orig.trim()) {
+      const origFormatado = formatarPrecoMoeda(orig.trim());
       const atuFormatado = formatarPrecoMoeda(precoAtual.trim());
       linhas.push(`De: ~R$ ${origFormatado}~`);
       linhas.push(`Por: *R$ ${atuFormatado}*`);
-      const desc = calcularDesconto(precoOriginal, precoAtual);
       if (desc) {
         linhas.push(`🏷️ ${desc}% OFF`);
       }
@@ -146,7 +166,16 @@ export default function Envios() {
       };
 
       setDadosShopee(dadosCarregados);
-      setTextoMensagemShopee(mensagem || gerarTextoOferta(dadosCarregados.nome, dadosCarregados.precoAtual, dadosCarregados.precoOriginal, linkAfiliado));
+      setTextoMensagemShopee(
+        mensagem ||
+          gerarTextoOferta(
+            dadosCarregados.nome,
+            dadosCarregados.precoAtual,
+            dadosCarregados.precoOriginal,
+            linkAfiliado,
+            dadosCarregados.descontoPercentual,
+          ),
+      );
 
       if (produtoJaEnviadoHoje) {
         toast.info("Atenção: Este produto já foi enviado hoje.");

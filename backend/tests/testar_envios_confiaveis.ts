@@ -1307,7 +1307,7 @@ try {
     assert.ok(
       tentativa.mensagem_snapshot?.includes("https://s.shopee.com.br/abc30"),
     );
-    assert.ok(!tentativa.mensagem_snapshot?.includes("De:"));
+    assert.ok(tentativa.mensagem_snapshot?.includes("De: ~R$ 160,00~"));
     assert.equal(tentativa.destino_id, "123@g.us");
     assert.equal(tentativa.destino_nome, "Grupo Teste");
     assert.equal(tentativa.plataforma, "shopee");

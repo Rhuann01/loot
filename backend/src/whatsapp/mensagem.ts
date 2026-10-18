@@ -13,8 +13,23 @@ export function formatarMensagem(d: DadosMensagem): string {
     d.descontoPercentual && d.descontoPercentual > 0
       ? Math.round(d.descontoPercentual)
       : calcularDesconto(d.precoOriginal, d.precoAtual);
-  const linhaPreco = d.precoOriginal
-    ? `De: ~R$ ${d.precoOriginal}~\nPor: *R$ ${d.precoAtual}*`
+
+  let precoOriginalFinal = d.precoOriginal;
+  if (
+    (!precoOriginalFinal || !precoOriginalFinal.trim()) &&
+    desconto &&
+    desconto > 0 &&
+    desconto < 100
+  ) {
+    const atualNum = converterPreco(d.precoAtual);
+    if (atualNum !== null && atualNum > 0) {
+      const originalNum = atualNum / (1 - desconto / 100);
+      precoOriginalFinal = originalNum.toFixed(2).replace(".", ",");
+    }
+  }
+
+  const linhaPreco = precoOriginalFinal
+    ? `De: ~R$ ${precoOriginalFinal}~\nPor: *R$ ${d.precoAtual}*`
     : `Por: *R$ ${d.precoAtual}*`;
   const extras = [
     desconto ? `🏷️ ${desconto}% OFF` : null,

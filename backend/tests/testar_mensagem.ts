@@ -14,7 +14,7 @@ assert.equal(
   "🔥 *Fone*\n\nDe: ~R$ 100,00~\nPor: *R$ 80,00*\n🏷️ 20% OFF\n\nhttps://a.test/x",
 );
 
-// 2. Shopee: sem preço original, com desconto percentual
+// 2. Shopee: sem preço original, com desconto percentual => calcula preço original estimado
 const m2 = formatarMensagem({
   nome: "Fone",
   precoAtual: "64,00",
@@ -24,7 +24,7 @@ const m2 = formatarMensagem({
 });
 assert.equal(
   m2,
-  "🔥 *Fone*\n\nPor: *R$ 64,00*\n🏷️ 60% OFF\n\nhttps://a.test/x",
+  "🔥 *Fone*\n\nDe: ~R$ 160,00~\nPor: *R$ 64,00*\n🏷️ 60% OFF\n\nhttps://a.test/x",
 );
 
 // 3. Sem desconto e sem original
