@@ -48,6 +48,7 @@ Thumbs.db
 
 # Documentação interna e materiais de design
 AGENTS.md
+DEPLOY_VPS_CONTEXT.md
 docs/
 backend/docs/
 scripts/

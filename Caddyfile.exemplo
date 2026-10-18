@@ -3,7 +3,7 @@
 # encaminhando as requisições para o backend Node.js (que já serve tanto a API quanto o frontend compilado).
 #
 # Como usar:
-# 1. Substitua "seu-dominio.com.br" pelo domínio real da aplicação.
+# 1. Substitua "seu-dominio.com.br" pelo seu domínio DuckDNS (ex: seu-subdominio.duckdns.org) ou domínio próprio.
 # 2. Certifique-se de que o backend Node.js está em execução na porta 3001 (PORT=3001).
 # 3. Certifique-se de que o build do frontend foi gerado em ./frontend/dist (npm run build no frontend).
 # 4. Inicie o Caddy: caddy run --config Caddyfile.exemplo

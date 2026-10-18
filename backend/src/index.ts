@@ -37,12 +37,17 @@ async function iniciar(): Promise<void> {
     });
 }
 
-// Executa iniciar apenas se este for o arquivo principal
+// Executa iniciar se este for o arquivo principal ou gerenciado pelo PM2
+const ehAmbienteTeste = (process.env.NODE_ENV ?? "").trim().toLowerCase() === "test";
 const ehExecucaoDireta =
-  process.argv[1] &&
-  (process.argv[1].endsWith("/src/index.ts") ||
-    process.argv[1].endsWith("/src/index.js") ||
-    process.argv[1].endsWith("/dist/src/index.js"));
+  !ehAmbienteTeste &&
+  (Boolean(process.env.pm_id !== undefined || process.env.pm_exec_path) ||
+    Boolean(
+      process.argv[1] &&
+        (process.argv[1].endsWith("/src/index.ts") ||
+          process.argv[1].endsWith("/src/index.js") ||
+          process.argv[1].endsWith("/dist/src/index.js")),
+    ));
 
 if (ehExecucaoDireta) {
   iniciar().catch((erro: unknown) => {
