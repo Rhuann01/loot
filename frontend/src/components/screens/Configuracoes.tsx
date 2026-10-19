@@ -5,10 +5,15 @@ import {
   Wifi,
   RotateCw,
   X,
+  LogOut,
+  QrCode,
+  Users,
+  AlertTriangle,
 } from "lucide-react";
 import { api } from "../../services/api";
 import { Switch } from "../ui/switch";
 import { toast } from "../ui/sonner";
+import OnboardingWhatsApp from "../OnboardingWhatsApp";
 
 interface SettingsData {
   scheduler: {
@@ -35,6 +40,10 @@ interface SettingsData {
 export default function Configuracoes() {
   const [salvando, setSalvando] = useState(false);
   const [testandoWhatsapp, setTestandoWhatsapp] = useState(false);
+  const [desconectandoWhatsapp, setDesconectandoWhatsapp] = useState(false);
+  const [modalConfirmarDesconexao, setModalConfirmarDesconexao] = useState(false);
+  const [modalOnboardingAberto, setModalOnboardingAberto] = useState(false);
+  const [iniciarNoPassoGrupo, setIniciarNoPassoGrupo] = useState(false);
   const [carregando, setCarregando] = useState(true);
 
   // Form states
@@ -134,7 +143,9 @@ export default function Configuracoes() {
       if (res.data) {
         const { scheduler, whatsapp, storage } = res.data;
 
-        setAutoEnvioAtivo(scheduler.ativo);
+        const estaConectado = whatsapp?.status === "connected";
+        const temGrupo = Boolean(whatsapp?.destino?.id);
+        setAutoEnvioAtivo(estaConectado && temGrupo ? scheduler.ativo : false);
 
         if (scheduler.horarios && scheduler.horarios.length > 0) {
           setHorariosSelecionados([...scheduler.horarios].sort());
@@ -181,10 +192,40 @@ export default function Configuracoes() {
     carregarConfiguracoes();
   }, []);
 
+  const handleToggleAutoEnvio = (checked: boolean) => {
+    if (checked) {
+      if (whatsappInfo.status !== "connected") {
+        toast.error("Conecte o WhatsApp antes de ativar o envio automático.");
+        setIniciarNoPassoGrupo(false);
+        setModalOnboardingAberto(true);
+        return;
+      }
+      if (!whatsappInfo.destino) {
+        toast.error("Configure um grupo de ofertas antes de ativar o envio automático.");
+        setIniciarNoPassoGrupo(true);
+        setModalOnboardingAberto(true);
+        return;
+      }
+    }
+    setAutoEnvioAtivo(checked);
+  };
+
   // Salvar alterações
   const handleSalvar = async () => {
     setSalvando(true);
     try {
+      if (autoEnvioAtivo && whatsappInfo.status !== "connected") {
+        toast.error("Não é possível ativar o envio automático com o WhatsApp desconectado.");
+        setSalvando(false);
+        return;
+      }
+
+      if (autoEnvioAtivo && !whatsappInfo.destino) {
+        toast.error("Não é possível ativar o envio automático sem um grupo de ofertas configurado.");
+        setSalvando(false);
+        return;
+      }
+
       // Extrair limite numérico e validar estritamente <= 12
       const matchNum = limiteDiarioInput.match(/\d+/);
       const limiteDiario = matchNum ? parseInt(matchNum[0], 10) : 12;
@@ -243,6 +284,40 @@ export default function Configuracoes() {
     }
   };
 
+  const handleDesconectar = async () => {
+    setDesconectandoWhatsapp(true);
+    try {
+      const res = await api.post("/api/whatsapp/disconnect");
+      if (res.data?.sucesso) {
+        toast.success("WhatsApp desconectado. O envio automático foi pausado.");
+        setAutoEnvioAtivo(false);
+        setModalConfirmarDesconexao(false);
+        await carregarConfiguracoes();
+      }
+    } catch (err: any) {
+      const msg =
+        err.response?.data?.error?.message || "Erro ao desconectar WhatsApp.";
+      toast.error(msg);
+    } finally {
+      setDesconectandoWhatsapp(false);
+    }
+  };
+
+  const handleAbrirConexao = () => {
+    setIniciarNoPassoGrupo(false);
+    setModalOnboardingAberto(true);
+  };
+
+  const handleAbrirMudarGrupo = () => {
+    setIniciarNoPassoGrupo(true);
+    setModalOnboardingAberto(true);
+  };
+
+  const handleFecharOnboarding = async () => {
+    setModalOnboardingAberto(false);
+    await carregarConfiguracoes();
+  };
+
   return (
     <div className="w-full max-w-[390px] mx-auto h-screen overflow-y-auto px-4 pt-6 pb-32 flex flex-col bg-background text-foreground antialiased selection:bg-indigo-100">
       {/* 1. Cabeçalho Principal */}
@@ -266,14 +341,52 @@ export default function Configuracoes() {
               Envio automático
             </span>
             <span className="text-xs text-zinc-500 font-normal">
-              {autoEnvioAtivo ? "Ativado" : "Desativado"}
+              {whatsappInfo.status !== "connected"
+                ? "Desativado (WhatsApp desconectado)"
+                : !whatsappInfo.destino
+                ? "Desativado (Grupo não configurado)"
+                : autoEnvioAtivo
+                ? "Ativado"
+                : "Desativado"}
             </span>
           </div>
           <Switch
-            checked={autoEnvioAtivo}
-            onCheckedChange={(checked) => setAutoEnvioAtivo(checked)}
+            checked={autoEnvioAtivo && whatsappInfo.status === "connected" && Boolean(whatsappInfo.destino)}
+            onCheckedChange={handleToggleAutoEnvio}
           />
         </div>
+
+        {whatsappInfo.status !== "connected" && (
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 text-[11px] text-amber-800">
+            <span>WhatsApp desconectado. O envio automático requer uma conexão ativa.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setIniciarNoPassoGrupo(false);
+                setModalOnboardingAberto(true);
+              }}
+              className="font-semibold underline text-amber-900 hover:text-amber-950 ml-2 shrink-0 cursor-pointer"
+            >
+              Conectar
+            </button>
+          </div>
+        )}
+
+        {whatsappInfo.status === "connected" && !whatsappInfo.destino && (
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 text-[11px] text-amber-800">
+            <span>Nenhum grupo de ofertas selecionado para o envio.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setIniciarNoPassoGrupo(true);
+                setModalOnboardingAberto(true);
+              }}
+              className="font-semibold underline text-amber-900 hover:text-amber-950 ml-2 shrink-0 cursor-pointer"
+            >
+              Escolher grupo
+            </button>
+          </div>
+        )}
 
         <div className="border-t border-zinc-100" />
 
@@ -484,27 +597,79 @@ export default function Configuracoes() {
           </span>
         </div>
 
-        <div className="border-t border-zinc-100 pt-1" />
-
-        {/* Botão Testar conexão */}
-        <button
-          type="button"
-          disabled={testandoWhatsapp}
-          onClick={handleTestarConexao}
-          className="w-full py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-        >
-          {testandoWhatsapp ? (
+        <div className="border-t border-zinc-100 pt-1 flex flex-col gap-2">
+          {carregando ? (
+            <div className="py-2.5 text-center text-xs text-zinc-400">
+              Carregando opções...
+            </div>
+          ) : whatsappInfo.status === "connected" ? (
             <>
-              <RotateCw className="size-4 animate-spin text-zinc-600" />
-              <span>Testando conexão...</span>
+              {/* Botão Mudar grupo */}
+              <button
+                type="button"
+                onClick={handleAbrirMudarGrupo}
+                className="w-full py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Users className="size-4 text-zinc-600" />
+                <span>Mudar grupo de destino</span>
+              </button>
+
+              {/* Botão Testar conexão */}
+              <button
+                type="button"
+                disabled={testandoWhatsapp}
+                onClick={handleTestarConexao}
+                className="w-full py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {testandoWhatsapp ? (
+                  <>
+                    <RotateCw className="size-4 animate-spin text-zinc-600" />
+                    <span>Testando conexão...</span>
+                  </>
+                ) : (
+                  <>
+                    <Wifi className="size-4 text-zinc-600" />
+                    <span>Testar conexão</span>
+                  </>
+                )}
+              </button>
+
+              {/* Botão Desconectar WhatsApp */}
+              <button
+                type="button"
+                disabled={desconectandoWhatsapp}
+                onClick={() => setModalConfirmarDesconexao(true)}
+                className="w-full py-2.5 rounded-xl border border-rose-200 bg-rose-50/60 hover:bg-rose-100 text-rose-700 text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                <LogOut className="size-4 text-rose-600" />
+                <span>Desconectar WhatsApp</span>
+              </button>
             </>
           ) : (
             <>
-              <Wifi className="size-4 text-zinc-600" />
-              <span>Testar conexão</span>
+              {/* Aviso Desconectado */}
+              <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-amber-800 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="size-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-semibold text-amber-900">WhatsApp Desconectado</span>
+                  <span className="text-[11px] text-amber-700 leading-tight">
+                    O envio automático foi pausado. Conecte um aparelho para voltar a enviar ofertas.
+                  </span>
+                </div>
+              </div>
+
+              {/* Botão Conectar WhatsApp */}
+              <button
+                type="button"
+                onClick={handleAbrirConexao}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <QrCode className="size-4" />
+                <span>Conectar WhatsApp (QR Code)</span>
+              </button>
             </>
           )}
-        </button>
+        </div>
 
         <p className="text-[11px] text-zinc-400 leading-normal">
           A conexão é utilizada em envios automáticos e manuais.
@@ -528,6 +693,63 @@ export default function Configuracoes() {
           </span>
         </div>
       </section>
+
+      {/* Modal de confirmação de desconexão */}
+      {modalConfirmarDesconexao && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setModalConfirmarDesconexao(false)}
+        >
+          <div
+            className="w-full max-w-[360px] bg-white rounded-2xl p-5 shadow-2xl flex flex-col gap-3.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 text-rose-600">
+              <AlertTriangle className="size-5 shrink-0" />
+              <h3 className="text-sm font-bold text-zinc-900">
+                Desconectar WhatsApp?
+              </h3>
+            </div>
+            <p className="text-xs text-zinc-600 leading-relaxed">
+              Ao desconectar, o envio automático será <strong>pausado imediatamente</strong> e nenhuma promoção será enviada até que você conecte um novo número.
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={desconectandoWhatsapp}
+                onClick={() => setModalConfirmarDesconexao(false)}
+                className="flex-1 py-2.5 rounded-xl border border-zinc-200 text-zinc-700 text-xs font-semibold hover:bg-zinc-50 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={desconectandoWhatsapp}
+                onClick={handleDesconectar}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-60 flex items-center justify-center gap-1.5"
+              >
+                {desconectandoWhatsapp ? (
+                  <>
+                    <RotateCw className="size-3.5 animate-spin" />
+                    <span>Desconectando...</span>
+                  </>
+                ) : (
+                  <span>Sim, desconectar</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Onboarding / Conexão / Troca de Grupo */}
+      {modalOnboardingAberto && (
+        <OnboardingWhatsApp
+          onConcluido={handleFecharOnboarding}
+          onPular={handleFecharOnboarding}
+          iniciarNoPassoGrupo={iniciarNoPassoGrupo}
+        />
+      )}
     </div>
   );
 }

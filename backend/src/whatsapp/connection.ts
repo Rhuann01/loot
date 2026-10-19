@@ -1,6 +1,7 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
+  Browsers,
   type GroupMetadata,
   type WASocket,
 } from "@whiskeysockets/baileys";
@@ -37,6 +38,9 @@ const TEMPO_ENTRE_RECONEXOES_MS = 2_000;
 
 let qrCodeAtual: string | null = null;
 let qrAtualizadoEm: string | null = null;
+let codigoPareamentoAtual: string | null = null;
+let codigoPareamentoGeradoEm: string | null = null;
+let telefonePareamentoAtual: string | null = null;
 let estadoConexao: EstadoConexao = "desconectado";
 let ultimaMudancaEm = new Date().toISOString();
 let sockAtual: WASocket | null = null;
@@ -57,6 +61,12 @@ function limparQrCode() {
   qrAtualizadoEm = null;
 }
 
+export function limparCodigoPareamento() {
+  codigoPareamentoAtual = null;
+  codigoPareamentoGeradoEm = null;
+  telefonePareamentoAtual = null;
+}
+
 async function criarConexao(): Promise<WASocket> {
   atualizarEstado("inicializando");
 
@@ -64,7 +74,8 @@ async function criarConexao(): Promise<WASocket> {
   const sock = makeWASocket({
     auth: state,
     logger: pino({ level: "silent" }),
-    browser: ["Loot", "Chrome", "1.0.0"],
+    browser: Browsers.ubuntu("Chrome"),
+    printQRInTerminal: false,
     generateHighQualityLinkPreview: true,
   });
 
@@ -86,6 +97,7 @@ async function criarConexao(): Promise<WASocket> {
 
     if (connection === "open") {
       limparQrCode();
+      limparCodigoPareamento();
       atualizarEstado("conectado");
       console.log("Whatsapp conectado com sucesso!");
     }
@@ -103,12 +115,14 @@ async function criarConexao(): Promise<WASocket> {
       console.error("conexão fechada:", erroMsg);
 
       if (foiDeslogado) {
+        limparCodigoPareamento();
         atualizarEstado("deslogado");
         console.warn("WhatsApp deslogado; nova leitura de QR code necessária");
         return;
       }
 
       if (foiSubstituido) {
+        limparCodigoPareamento();
         atualizarEstado("desconectado");
         console.warn(
           "WhatsApp desconectado: a sessão foi substituída por outra instância; encerre a outra conexão antes de tentar novamente",
@@ -184,16 +198,154 @@ export async function solicitarReconexao(opcoes: {
   }
 
   if (opcoes.forcarNovoQr) {
-    if (sockAtual || conexaoEmAndamento) {
-      throw new Error("já existe uma conexão do WhatsApp em andamento");
+    const sockParaEncerrar = sockAtual;
+    sockAtual = null;
+    conexaoEmAndamento = null;
+
+    if (sockParaEncerrar) {
+      try {
+        sockParaEncerrar.end(undefined);
+      } catch {
+        // silencioso
+      }
     }
 
     await rm("auth_info", { recursive: true, force: true });
     limparQrCode();
+    limparCodigoPareamento();
     atualizarEstado("desconectado");
   }
 
   return conectarWhatsApp();
+}
+
+export async function desconectarWhatsApp(): Promise<void> {
+  if (reconexaoAgendada) {
+    clearTimeout(reconexaoAgendada);
+    reconexaoAgendada = null;
+  }
+
+  const sockParaEncerrar = sockAtual;
+  sockAtual = null;
+  conexaoEmAndamento = null;
+
+  if (sockParaEncerrar) {
+    try {
+      await sockParaEncerrar.logout();
+    } catch {
+      try {
+        sockParaEncerrar.end(undefined);
+      } catch {
+        // silencioso se o socket já estiver fechado
+      }
+    }
+  }
+
+  await rm("auth_info", { recursive: true, force: true });
+  limparQrCode();
+  limparCodigoPareamento();
+  atualizarEstado("desconectado");
+}
+
+export function normalizarTelefoneParaPareamento(telefone: string): string {
+  let digits = telefone.replace(/\D/g, "");
+  if (!digits) {
+    throw new Error("Número de telefone não informado");
+  }
+  if (digits.startsWith("0")) {
+    digits = digits.slice(1);
+  }
+  if (digits.startsWith("5555")) {
+    digits = digits.slice(2);
+  }
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+    return digits;
+  }
+  if (digits.length === 10 || digits.length === 11) {
+    return `55${digits}`;
+  }
+  if (digits.length < 10 || digits.length > 15) {
+    throw new Error("Número de telefone inválido. Informe o DDD e o número com 10 ou 11 dígitos.");
+  }
+  return digits;
+}
+
+export function formatarCodigoPareamento(codigo: string): string {
+  const limpo = codigo.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (limpo.length === 8) {
+    return `${limpo.slice(0, 4)}-${limpo.slice(4)}`;
+  }
+  return codigo;
+}
+
+export type SolicitadorCodigoPareamento = (telefone: string) => Promise<string>;
+let solicitadorCodigoCustom: SolicitadorCodigoPareamento | null = null;
+export function definirSolicitadorCodigoParaTeste(fn: SolicitadorCodigoPareamento | null) {
+  solicitadorCodigoCustom = fn;
+}
+
+export async function solicitarCodigoPareamento(telefone: string): Promise<string> {
+  if (solicitadorCodigoCustom) {
+    return solicitadorCodigoCustom(telefone);
+  }
+
+  const numeroNormalizado = normalizarTelefoneParaPareamento(telefone);
+
+  if (reconexaoAgendada) {
+    clearTimeout(reconexaoAgendada);
+    reconexaoAgendada = null;
+  }
+
+  const sockAntigo = sockAtual;
+  sockAtual = null;
+  conexaoEmAndamento = null;
+  if (sockAntigo) {
+    try {
+      sockAntigo.end(undefined);
+    } catch {}
+  }
+
+  await rm("auth_info", { recursive: true, force: true });
+  limparQrCode();
+  limparCodigoPareamento();
+  atualizarEstado("desconectado");
+
+  const sock = await conectarWhatsApp();
+
+  // Aguarda o socket WebSocket abrir completamente antes de pedir o código (até 8s)
+  const inicio = Date.now();
+  while (!sock.ws?.isOpen && Date.now() - inicio < 8000) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  // Pequena pausa para garantir estabilidade da sessão
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  if (sock.authState.creds.registered) {
+    throw new Error("O WhatsApp já está registrado. Desconecte antes de pedir novo código.");
+  }
+
+  console.log(`[WhatsApp Pairing] Solicitando código para ${numeroNormalizado}...`);
+  try {
+    const rawCode = await sock.requestPairingCode(numeroNormalizado);
+    const formatado = formatarCodigoPareamento(rawCode);
+    codigoPareamentoAtual = formatado;
+    codigoPareamentoGeradoEm = new Date().toISOString();
+    telefonePareamentoAtual = numeroNormalizado;
+    atualizarEstado("aguardando_qr");
+    console.log(`[WhatsApp Pairing] Código gerado com sucesso: ${formatado}`);
+    return formatado;
+  } catch (erro) {
+    console.error("[WhatsApp Pairing] Erro ao solicitar código no Baileys:", erro);
+    throw erro;
+  }
+}
+
+export function getCodigoPareamento() {
+  return {
+    codigo: codigoPareamentoAtual,
+    atualizadoEm: codigoPareamentoGeradoEm,
+    telefone: telefonePareamentoAtual,
+  };
 }
 
 export function getSock(): WASocket | null {

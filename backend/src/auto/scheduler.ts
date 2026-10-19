@@ -2,6 +2,7 @@ import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import { coletores, getAffiliateProvider, temAffiliateProvider } from "../integrations/registry.js";
 import type { IntegrationKey } from "../integrations/types.js";
+import { getStatusConexao } from "../whatsapp/connection.js";
 import { TIMEZONE } from "../lib/time.js";
 import {
   getConfig,
@@ -301,6 +302,11 @@ export function recarregarScheduler() {
     cron.schedule(horarioParaCron(horario), async () => {
       if (!obterConfigScheduler().ativo) {
         console.log("scheduler: execução ignorada porque está desativado");
+        return;
+      }
+
+      if (process.env.NODE_ENV !== "test" && !getStatusConexao().conectado) {
+        console.warn("scheduler: execução ignorada porque o WhatsApp está desconectado");
         return;
       }
 

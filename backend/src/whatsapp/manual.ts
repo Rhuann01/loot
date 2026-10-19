@@ -13,6 +13,7 @@ import {
 } from "../db/queries.js";
 import { executarEnvioProtegido } from "./dispatch.js";
 import { enviarProduto, montarMensagemDoProduto } from "./sender.js";
+import { getStatusConexao } from "./connection.js";
 import {
   temAffiliateProvider,
   getAffiliateProvider,
@@ -75,6 +76,11 @@ export async function reenviarManualIdempotente(
     const tentativaAtual = buscarTentativaEnvioPorId(tentativa.id);
     if (!tentativaAtual) return "ambiguous";
     if (tentativaAtual.status !== "sending") return resultadoDaTentativa(tentativaAtual);
+
+    if (enviar === enviarProduto && !getStatusConexao().conectado) {
+      marcarFalhaEnvio(produto.id, "WhatsApp não está conectado", tentativa.id, true);
+      return "failed";
+    }
 
     let linkAfiliado = produto.link_afiliado;
     const precisaGerarLink =

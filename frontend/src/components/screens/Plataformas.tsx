@@ -151,6 +151,11 @@ export default function Plataformas() {
 
   // Sincronizar plataforma agora
   const handleSincronizar = async (key: string) => {
+    if (key === "mercado_livre") {
+      mostrarToast("A coleta do Mercado Livre é automatizada diariamente para economizar créditos.", "info");
+      return;
+    }
+
     const plat = plataformas.find((p) => p.key === key);
     if (plat && !plat.available) {
       mostrarToast(plat.motivo || "Não disponível nesta versão");
@@ -509,24 +514,26 @@ export default function Plataformas() {
                         Configurar
                       </button>
 
-                      {/* Botão Sincronizar agora */}
-                      <button
-                        type="button"
-                        disabled={isSincronizando}
-                        onClick={() => handleSincronizar(p.key)}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-200/90 bg-white text-zinc-800 text-xs font-semibold hover:bg-zinc-50 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
-                      >
-                        <RotateCw
-                          className={`size-3.5 text-zinc-600 ${
-                            isSincronizando
-                              ? "animate-spin text-indigo-600"
-                              : ""
-                          }`}
-                        />
-                        {isSincronizando
-                          ? "Sincronizando..."
-                          : "Sincronizar agora"}
-                      </button>
+                      {/* Botão Sincronizar agora (oculto no Mercado Livre para preservar cota Apify) */}
+                      {p.key !== "mercado_livre" && (
+                        <button
+                          type="button"
+                          disabled={isSincronizando}
+                          onClick={() => handleSincronizar(p.key)}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-200/90 bg-white text-zinc-800 text-xs font-semibold hover:bg-zinc-50 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <RotateCw
+                            className={`size-3.5 text-zinc-600 ${
+                              isSincronizando
+                                ? "animate-spin text-indigo-600"
+                                : ""
+                            }`}
+                          />
+                          {isSincronizando
+                            ? "Sincronizando..."
+                            : "Sincronizar agora"}
+                        </button>
+                      )}
 
                       {/* Botão Desativar / Ativar */}
                       <button

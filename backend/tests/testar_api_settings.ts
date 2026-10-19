@@ -3,12 +3,14 @@ import { iniciarApiDeTeste } from "./helpers/api-harness.js";
 import {
   definirStatusConexaoParaTeste,
   definirListadorGruposParaTeste,
+  definirSolicitadorCodigoParaTeste,
+  limparCodigoPareamento,
 } from "../src/whatsapp/connection.js";
 
 const api = await iniciarApiDeTeste();
 
 try {
-  const { setConfig, salvarProduto } = await import("../src/db/queries.js");
+  const { setConfig, getConfig, salvarProduto } = await import("../src/db/queries.js");
 
   // Configuração inicial
   setConfig("auto_envio_ativo", "true");
@@ -251,6 +253,41 @@ try {
   assert.equal(resTestOffline.status, 503, "WhatsApp offline deve responder 503");
   assert.equal((resTestOffline.json as any).error.code, "WHATSAPP_OFFLINE");
 
+  // Tentativa de ativar envio automático com WhatsApp offline deve falhar com 400 WHATSAPP_DESCONECTADO
+  const resAtivarOffline = await api.req("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ scheduler: { ativo: true } }),
+  });
+  assert.equal(resAtivarOffline.status, 400, "Ativar com WhatsApp offline deve responder 400");
+  assert.equal((resAtivarOffline.json as any).error.code, "WHATSAPP_DESCONECTADO");
+
+  // Tentativa de ativar sem grupo de ofertas configurado deve falhar com 400 WHATSAPP_SEM_GRUPO
+  definirStatusConexaoParaTeste(() => ({
+    estado: "conectado",
+    conectado: true,
+    requerQr: false,
+    qrDisponivel: false,
+    reconexaoNecessaria: false,
+    ultimaMudancaEm: new Date().toISOString(),
+  }));
+  setConfig("whatsapp_grupo_id", "");
+  const resAtivarSemGrupo = await api.req("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ scheduler: { ativo: true } }),
+  });
+  assert.equal(resAtivarSemGrupo.status, 400, "Ativar sem grupo deve responder 400");
+  assert.equal((resAtivarSemGrupo.json as any).error.code, "WHATSAPP_SEM_GRUPO");
+
+  // Restaura WhatsApp desconectado para próximos testes
+  definirStatusConexaoParaTeste(() => ({
+    estado: "desconectado",
+    conectado: false,
+    requerQr: false,
+    qrDisponivel: false,
+    reconexaoNecessaria: false,
+    ultimaMudancaEm: new Date().toISOString(),
+  }));
+
   // -------------------------------------------------------------
   // 10. TikTok e credenciais não podem ser habilitados pelo settings
   // -------------------------------------------------------------
@@ -283,12 +320,47 @@ try {
   assert.equal((resTiktok.json as any).available, false);
   assert.equal((resTiktok.json as any).ativo, false);
 
+  // Teste de desconexão do WhatsApp
+  setConfig("auto_envio_ativo", "true");
+  const resDisconnect = await api.req("/api/whatsapp/disconnect", { method: "POST" });
+  assert.equal(resDisconnect.status, 200, "POST /api/whatsapp/disconnect deve retornar 200");
+  assert.equal((resDisconnect.json as any).sucesso, true);
+  assert.equal((resDisconnect.json as any).autoEnvioAtivo, false);
+  assert.equal(getConfig("auto_envio_ativo"), "false", "auto_envio_ativo deve ser false após desconectar");
+
+  // Teste de código de pareamento por telefone
+  limparCodigoPareamento();
+  const resPairingGet = await api.req("/api/whatsapp/pairing-code");
+  assert.equal(resPairingGet.status, 200, "GET /api/whatsapp/pairing-code deve retornar 200");
+  assert.equal((resPairingGet.json as any).codigo, null);
+
+  const resPairingVazio = await api.req("/api/whatsapp/pairing-code", {
+    method: "POST",
+    body: JSON.stringify({ telefone: "" }),
+  });
+  assert.equal(resPairingVazio.status, 400, "POST sem telefone deve retornar 400");
+  assert.equal((resPairingVazio.json as any).error.code, "PARAMETRO_INVALIDO");
+
+  definirSolicitadorCodigoParaTeste(async (_tel: string) => {
+    return "ABCD-1234";
+  });
+
+  const resPairingOk = await api.req("/api/whatsapp/pairing-code", {
+    method: "POST",
+    body: JSON.stringify({ telefone: "11999998888" }),
+  });
+  assert.equal(resPairingOk.status, 200, "POST /api/whatsapp/pairing-code com telefone válido deve retornar 200");
+  assert.equal((resPairingOk.json as any).sucesso, true);
+  assert.equal((resPairingOk.json as any).codigo, "ABCD-1234");
+
   console.log("Resultado: api settings passou");
 } finally {
   const { pararScheduler } = await import("../src/auto/scheduler.js");
   pararScheduler();
   definirStatusConexaoParaTeste(null);
   definirListadorGruposParaTeste(null);
+  definirSolicitadorCodigoParaTeste(null);
+  limparCodigoPareamento();
   await api.encerrar();
 }
 

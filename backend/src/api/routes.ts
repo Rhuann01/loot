@@ -74,6 +74,9 @@ import {
   listarGruposWhatsApp,
   solicitarReconexao,
   getNumeroConectado,
+  desconectarWhatsApp,
+  solicitarCodigoPareamento,
+  getCodigoPareamento,
 } from "../whatsapp/connection.js";
 import { getConfig, setConfig } from "../db/queries.js";
 import {
@@ -466,6 +469,25 @@ router.get("/whatsapp/qr", (_req, res) => {
   res.json(getQrCode());
 });
 
+router.get("/whatsapp/pairing-code", (_req, res) => {
+  res.json(getCodigoPareamento());
+});
+
+router.post("/whatsapp/pairing-code", whatsappReconnectLimiter, async (req, res) => {
+  const telefone = req.body?.telefone;
+  if (typeof telefone !== "string" || !telefone.trim()) {
+    return enviarErro(res, 400, "PARAMETRO_INVALIDO", "Número de telefone é obrigatório");
+  }
+  try {
+    const codigo = await solicitarCodigoPareamento(telefone);
+    res.json({ sucesso: true, codigo });
+  } catch (erro) {
+    const msg = erro instanceof Error ? erro.message : String(erro);
+    console.error("[API] Falha em /whatsapp/pairing-code:", erro);
+    enviarErro(res, 400, "ERRO_PAREAMENTO", msg);
+  }
+});
+
 router.post("/whatsapp/reconnect", whatsappReconnectLimiter, async (_req, res) => {
   const { forcarNovoQr } = _req.body as { forcarNovoQr?: unknown };
 
@@ -487,6 +509,32 @@ router.post("/whatsapp/reconnect", whatsappReconnectLimiter, async (_req, res) =
       "WHATSAPP_OFFLINE",
       "não foi possível iniciar a conexão do WhatsApp",
     );
+  }
+});
+
+router.post("/whatsapp/disconnect", async (_req, res) => {
+  try {
+    await desconectarWhatsApp();
+
+    // Paralisa o envio automático e salva auto_envio_ativo = false
+    const configAtual = obterConfigScheduler();
+    salvarConfigScheduler({ ...configAtual, ativo: false });
+
+    gravarAtividade({
+      tipo: "whatsapp_status",
+      titulo: "WhatsApp: desconectado",
+      detalhe: "WhatsApp desconectado pelo painel; envio automático pausado",
+    });
+
+    res.json({
+      sucesso: true,
+      status: getStatusConexao(),
+      autoEnvioAtivo: false,
+    });
+  } catch (erro) {
+    const mensagem = erro instanceof Error ? erro.message : String(erro);
+    console.error("falha ao desconectar WhatsApp:", erro);
+    enviarErro(res, 500, "ERRO_INTERNO", `Falha ao desconectar WhatsApp: ${mensagem}`);
   }
 });
 
@@ -558,6 +606,10 @@ router.put("/whatsapp/group", async (req, res) => {
 router.delete("/whatsapp/group", (_req, res) => {
   setConfig("whatsapp_grupo_id", "");
   setConfig("whatsapp_grupo_nome", "");
+  const configAtual = obterConfigScheduler();
+  if (configAtual.ativo) {
+    salvarConfigScheduler({ ...configAtual, ativo: false });
+  }
   res.json({ sucesso: true });
 });
 
@@ -907,6 +959,27 @@ router.put("/scheduler", settingsLimiter, (req, res) => {
     );
   }
 
+  if (ativo === true) {
+    const statusWhatsApp = getStatusConexao();
+    if (!statusWhatsApp.conectado) {
+      return enviarErro(
+        res,
+        400,
+        "WHATSAPP_DESCONECTADO",
+        "Não é possível ativar o envio automático com o WhatsApp desconectado. Conecte o WhatsApp primeiro.",
+      );
+    }
+    const grupoId = getConfig("whatsapp_grupo_id");
+    if (!grupoId || !grupoId.trim()) {
+      return enviarErro(
+        res,
+        400,
+        "WHATSAPP_SEM_GRUPO",
+        "Não é possível ativar o envio automático sem um grupo de destino configurado.",
+      );
+    }
+  }
+
   const configAtual = obterConfigScheduler();
   const limite =
     limite_diario === undefined
@@ -1058,6 +1131,27 @@ router.put("/settings", settingsLimiter, (req, res) => {
     ativo = ativoRaw;
   }
 
+  if (ativo === true) {
+    const statusWhatsApp = getStatusConexao();
+    if (!statusWhatsApp.conectado) {
+      return enviarErro(
+        res,
+        400,
+        "WHATSAPP_DESCONECTADO",
+        "Não é possível ativar o envio automático com o WhatsApp desconectado. Conecte o WhatsApp primeiro.",
+      );
+    }
+    const grupoId = getConfig("whatsapp_grupo_id");
+    if (!grupoId || !grupoId.trim()) {
+      return enviarErro(
+        res,
+        400,
+        "WHATSAPP_SEM_GRUPO",
+        "Não é possível ativar o envio automático sem um grupo de destino configurado.",
+      );
+    }
+  }
+
   // 2. horarios
   const horariosRaw = schedulerInput.horarios;
   let horarios = configAtual.horarios;
@@ -1184,6 +1278,10 @@ router.post("/produtos/:id/selecionar", (req, res) => {
 });
 
 router.post("/produtos/:id/reenviar", sendsLimiter, async (req, res) => {
+  if (process.env.NODE_ENV !== "test" && !getStatusConexao().conectado) {
+    return enviarErro(res, 503, "WHATSAPP_OFFLINE", "WhatsApp não está conectado. Conecte um número nas configurações.");
+  }
+
   const id = Number(req.params.id);
   const chave = req.header("Idempotency-Key")?.trim();
   if (!chave || chave.length > 200) {
@@ -1314,6 +1412,10 @@ router.post("/sends/manual/preview", scrapingLimiter, async (req, res) => {
 });
 
 router.post("/sends/manual", sendsLimiter, async (req, res) => {
+  if (process.env.NODE_ENV !== "test" && !getStatusConexao().conectado) {
+    return enviarErro(res, 503, "WHATSAPP_OFFLINE", "WhatsApp não está conectado. Conecte um número nas configurações.");
+  }
+
   const chave = (
     req.header("Idempotency-Key") ??
     req.body?.idempotencyKey ??
@@ -1403,6 +1505,10 @@ router.get("/sends/:attemptId/message", (req, res) => {
 });
 
 router.post("/sends/:attemptId/retry", sendsLimiter, async (req, res) => {
+  if (process.env.NODE_ENV !== "test" && !getStatusConexao().conectado) {
+    return enviarErro(res, 503, "WHATSAPP_OFFLINE", "WhatsApp não está conectado. Conecte um número nas configurações.");
+  }
+
   const attemptId = Number(req.params.attemptId);
   if (!Number.isInteger(attemptId) || attemptId <= 0) {
     return enviarErro(res, 400, "PARAMETRO_INVALIDO", "attemptId inválido");

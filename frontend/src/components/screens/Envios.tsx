@@ -228,9 +228,12 @@ export default function Envios() {
         toast.info("Envio concluído com status: " + (res.data?.status || "concluído"));
       }
     } catch (err: any) {
+      const code = err.response?.data?.error?.code;
       const msg =
-        err.response?.data?.error?.message ||
-        "Falha ao enviar mensagem para o WhatsApp. Verifique se o WhatsApp está conectado.";
+        code === "WHATSAPP_OFFLINE"
+          ? "Não é possível enviar: o WhatsApp está desconectado. Conecte um número nas Configurações."
+          : err.response?.data?.error?.message ||
+            "Falha ao enviar mensagem para o WhatsApp. Verifique se o WhatsApp está conectado.";
       toast.error(msg);
     } finally {
       setEnviandoShopee(false);

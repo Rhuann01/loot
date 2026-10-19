@@ -258,7 +258,11 @@ const Promocoes = () => {
         }
       }
     } catch (err: any) {
-      const msg = err.response?.data?.error?.message || "Falha ao enviar promoção.";
+      const code = err.response?.data?.error?.code;
+      const msg =
+        code === "WHATSAPP_OFFLINE"
+          ? "Não é possível enviar: o WhatsApp está desconectado. Conecte um número nas configurações."
+          : err.response?.data?.error?.message || "Falha ao enviar promoção.";
       mostrarToast(msg);
     }
   };
